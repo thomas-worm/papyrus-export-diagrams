@@ -62,7 +62,7 @@ public class ExportApplication implements IApplication {
         if (modelDir == null || outDir == null) {
             System.err.println("usage: --modelDir <dir> --outDir <dir> "
                     + "[--format SVG|PNG|JPEG|BMP|GIF|PDF] [--naming xmiId|name]");
-            System.exit(2);
+            exitWithCode(2, context);
             return Integer.valueOf(2);
         }
         Files.createDirectories(outDir);
@@ -129,7 +129,10 @@ public class ExportApplication implements IApplication {
                     exported += r.exported;
                     failed   += r.failed;
                 } catch (NoClassDefFoundError e) {
-                    System.err.println("Sirius classes not loadable for " + aird + ": " + e);
+                    System.err.println("WARNING: Sirius export unavailable for " + aird);
+                    System.err.println("  Missing class: " + e);
+                    System.err.println("  Note: Papyrus Desktop 7.1.0 may not include full Sirius bundles.");
+                    System.err.println("        Ensure org.eclipse.sirius* plugins are installed if needed.");
                     sirius_skipped++;
                 } catch (LinkageError e) {
                     System.err.println("Sirius linkage error for " + aird + ": " + e);
@@ -145,9 +148,57 @@ public class ExportApplication implements IApplication {
         System.out.println("Done. exported=" + exported
                 + " failed=" + failed
                 + " sirius_skipped=" + sirius_skipped);
+        
+        // Provide diagnostic info when nothing was exported
+        if (exported == 0) {
+            if (failed > 0 && sirius_skipped == 0) {
+                System.out.println("ERROR: All diagrams failed to export. Check .notation file compatibility.");
+                System.out.println("  GMF export requires TransactionalEditingDomain (not available in headless mode).");
+            } else if (sirius_skipped > 0 && failed == 0) {
+                System.out.println("Note: No exports completed. Sirius bundles not available in this Papyrus install.");
+                System.out.println("  To enable Sirius export, install org.eclipse.sirius* plugins.");
+            } else if (failed > 0 && sirius_skipped > 0) {
+                System.out.println("ERROR: Both GMF and Sirius export failed:");
+                System.out.println("  - GMF (.notation): Requires editing domain (headless limitation)");
+                System.out.println("  - Sirius (.aird): Missing required bundles");
+            }
+        }
+        
         int exitCode = failed == 0 ? 0 : 1;
-        System.exit(exitCode);
-        return exitCode;
+        System.out.println("Forcing application shutdown with exit code: " + exitCode);
+        exitWithCode(exitCode, context);
+        return Integer.valueOf(exitCode);
+    }
+
+    private void exitWithCode(int code, IApplicationContext context) {
+        System.out.flush();
+        System.err.flush();
+        
+        System.err.println("DEBUG: About to exit with code " + code);
+        System.err.flush();
+        
+        // Start a daemon thread that will force halt() after 2 seconds
+        // This ensures termination even if System.exit() gets stuck
+        Thread forceExitThread = new Thread("ForceExit") {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(2000);
+                    System.err.println("DEBUG: Timeout - forcing halt()");
+                    System.err.flush();
+                    Runtime.getRuntime().halt(code);
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+        };
+        forceExitThread.setDaemon(true);
+        forceExitThread.start();
+        
+        // Now try normal exit
+        System.err.println("DEBUG: Calling System.exit(" + code + ")");
+        System.err.flush();
+        System.exit(code);
     }
 
     @Override public void stop() { /* nothing */ }

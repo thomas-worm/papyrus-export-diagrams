@@ -135,6 +135,7 @@ runs:
         mkdir -p "${WORKSPACE_DIR}"
 
         set +e
+        # Start launcher in background so we can monitor for output
         "${LAUNCHER}" -nosplash -consoleLog \
             -application de.thomas_worm.architecture.papyrus.plugins.export.app \
             -data "${WORKSPACE_DIR}" \
@@ -143,8 +144,37 @@ runs:
             --format "${EXPORT_FORMAT}" \
             --naming "${NAMING_MODE}" \
             -vmargs -Djava.awt.headless=false \
-            2>&1 | tee "${RUNNER_TEMP}/papyrus-export.log"
-        RC=${PIPESTATUS[0]}
+            2>&1 | tee "${RUNNER_TEMP}/papyrus-export.log" &
+        LAUNCHER_PID=$!
+        
+        # Monitor process: kill if silent for 30+ seconds, but reset timer on new output
+        LAST_OUTPUT_TIME=$(date +%s)
+        SILENCE_THRESHOLD=30
+        while kill -0 $LAUNCHER_PID 2>/dev/null; do
+            sleep 1
+            CURRENT_TIME=$(date +%s)
+            
+            # Check if log file was modified recently (new output)
+            if [ -f "${RUNNER_TEMP}/papyrus-export.log" ]; then
+                LOG_MTIME=$(stat -f%m "${RUNNER_TEMP}/papyrus-export.log" 2>/dev/null || stat -c%Y "${RUNNER_TEMP}/papyrus-export.log" 2>/dev/null)
+                if [ -n "$LOG_MTIME" ] && [ "$LOG_MTIME" -gt "$LAST_OUTPUT_TIME" ]; then
+                    LAST_OUTPUT_TIME=$LOG_MTIME
+                fi
+            fi
+            
+            # Check silence duration
+            TIME_SILENT=$((CURRENT_TIME - LAST_OUTPUT_TIME))
+            if [ $TIME_SILENT -gt $SILENCE_THRESHOLD ]; then
+                echo "ERROR: Process silent for ${TIME_SILENT}s - force killing (PID: $LAUNCHER_PID)"
+                kill -9 $LAUNCHER_PID 2>/dev/null || true
+                pkill -9 -f "eclipse|papyrus" 2>/dev/null || true
+                break
+            fi
+        done
+        
+        wait $LAUNCHER_PID 2>/dev/null
+        RC=$?
+        echo "JVM exit code: $RC"
         set -e
 
         # The application prints "Done. exported=N failed=M" on its last line.
@@ -160,6 +190,8 @@ runs:
         echo "Exported: ${EXPORTED} diagram(s). Failed: ${FAILED}."
 
         if [[ "${FAIL_ON_ERROR}" == "true" ]] && { [[ "${RC}" -ne 0 ]] || [[ "${FAILED}" -gt 0 ]]; }; then
-          echo "::error::Papyrus export reported ${FAILED} failure(s) (launcher exit ${RC})."
+          echo "::error::Papyrus export failed: ${FAILED} diagram(s) failed, launcher exit code ${RC}."
+          echo "::error::Check log for details - look for 'GMF:' or 'Sirius:' messages."
+          echo "::error::Note: Headless Papyrus may not support all diagram types (GMF requires editing domain)."
           exit 1
         fi

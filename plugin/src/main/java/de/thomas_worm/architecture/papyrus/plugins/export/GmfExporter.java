@@ -74,6 +74,28 @@ final class GmfExporter {
                 Resource res;
                 ResourceSet rs = new ResourceSetImpl();
                 try {
+                    // Try to create a TransactionalEditingDomain for this ResourceSet
+                    // This is required for GMF export to work
+                    try {
+                        Class<?> editingDomainClass = Class.forName(
+                            "org.eclipse.emf.transaction.TransactionalEditingDomain");
+                        Class<?> factoryClass = Class.forName(
+                            "org.eclipse.emf.transaction.TransactionalEditingDomain$Factory");
+                        
+                        // Get the INSTANCE field from Factory
+                        java.lang.reflect.Field instanceField = factoryClass.getField("INSTANCE");
+                        Object factoryInstance = instanceField.get(null);
+                        
+                        // Call getEditingDomain(resourceSet) or create(resourceSet)
+                        java.lang.reflect.Method getMethod = factoryClass.getMethod("getEditingDomain", ResourceSet.class);
+                        Object editingDomain = getMethod.invoke(factoryInstance, rs);
+                        
+                        System.out.println("GMF: TransactionalEditingDomain created for resource set");
+                    } catch (Exception e) {
+                        System.err.println("GMF: Could not create editing domain: " + e);
+                        // Continue anyway - maybe it will work without it
+                    }
+                    
                     res = rs.getResource(URI.createFileURI(notation.toAbsolutePath().toString()), true);
                     Path uml = di.resolveSibling(base + ".uml");
                     if (Files.exists(uml)) {
@@ -91,32 +113,99 @@ final class GmfExporter {
                     String stem = filenameFor(d, useId, usedNames);
                     Path outFile = outDir.resolve(stem + "." + ext);
                     try {
-                        // CopyToImageUtil API varies across GMF versions.
-                        // Some versions expect DiagramEditPart, others accept Diagram.
-                        // Use reflection to avoid compile-time type checking.
+                        // Ensure the diagram's resource has access to the editing domain
+                        // copyToImage() looks for it via the resource
                         try {
-                            CopyToImageUtil util = new CopyToImageUtil();
-                            var copyMethod = util.getClass().getMethod("copyToImage",
-                                    Object.class,
-                                    org.eclipse.core.runtime.IPath.class,
-                                    ImageFileFormat.class,
-                                    org.eclipse.core.runtime.IProgressMonitor.class);
-                            copyMethod.invoke(util,
-                                    (Object) d,
-                                    org.eclipse.core.runtime.Path.fromOSString(outFile.toString()),
-                                    gmfFormat,
-                                    new NullProgressMonitor());
-                        } catch (NoSuchMethodException ex) {
+                            Resource diagramRes = d.eResource();
+                            if (diagramRes != null && diagramRes.getResourceSet() == rs) {
+                                // Try to register the editing domain for the diagram's resource
+                                Class<?> editingDomainClass = Class.forName(
+                                    "org.eclipse.emf.transaction.TransactionalEditingDomain");
+                                Class<?> registryClass = Class.forName(
+                                    "org.eclipse.emf.transaction.TransactionalEditingDomain$Registry");
+                                
+                                // Get INSTANCE from editingDomainClass
+                                java.lang.reflect.Method getRegistryMethod = 
+                                    editingDomainClass.getMethod("getRegistry");
+                                Object registry = getRegistryMethod.invoke(null);
+                                
+                                // Get or create editing domain for this ResourceSet
+                                java.lang.reflect.Method getMethod = 
+                                    registryClass.getMethod("getEditingDomain", ResourceSet.class);
+                                Object editingDomain = getMethod.invoke(registry, rs);
+                                
+                                System.out.println("GMF: editing domain associated with diagram resource");
+                            }
+                        } catch (Exception e) {
+                            System.err.println("GMF: could not associate editing domain with diagram: " + e);
+                        }
+                        
+                        // CopyToImageUtil.copyToImage() method signature varies across GMF versions.
+                        // Attempt to invoke via reflection to handle API differences.
+                        var method = findCopyToImageMethod(CopyToImageUtil.class);
+                        if (method == null) {
                             System.err.println("GMF: copyToImage method not found for " + stem);
+                            r.failed++;
                             continue;
                         }
-                        System.out.println("exported (GMF): " + outFile);
-                        r.exported++;
-                    } catch (java.lang.reflect.InvocationTargetException ex) {
-                        if (ex.getCause() instanceof ClassCastException) {
-                            System.err.println("GMF: cannot export " + stem + " (API expects DiagramEditPart, not Diagram)");
-                        } else {
-                            System.err.println("GMF: failed to export " + stem + ": " + ex.getCause());
+                        
+                        try {
+                            // Try static invocation first (common pattern)
+                            java.lang.reflect.Modifier.isStatic(method.getModifiers());
+                            boolean isStatic = java.lang.reflect.Modifier.isStatic(method.getModifiers());
+                            
+                            org.eclipse.core.runtime.IPath eclipsePath = 
+                                    org.eclipse.core.runtime.Path.fromOSString(outFile.toString());
+                            
+                            // Determine how many parameters the method expects
+                            Class<?>[] paramTypes = method.getParameterTypes();
+                            Object[] args;
+                            
+                            if (paramTypes.length == 5) {
+                                // Method expects PreferencesHint as 5th parameter
+                                // Try to create a default instance or pass null if it's optional
+                                try {
+                                    Class<?> prefsHintClass = Class.forName(
+                                        "org.eclipse.gmf.runtime.diagram.core.preferences.PreferencesHint");
+                                    java.lang.reflect.Constructor<?> ctor = 
+                                        prefsHintClass.getConstructor(String.class);
+                                    Object prefsHint = ctor.newInstance("Papyrus");
+                                    args = new Object[] { d, eclipsePath, gmfFormat, 
+                                        new org.eclipse.core.runtime.NullProgressMonitor(), prefsHint };
+                                } catch (Exception ex) {
+                                    System.err.println("GMF: could not create PreferencesHint, trying without: " + ex);
+                                    args = new Object[] { d, eclipsePath, gmfFormat, 
+                                        new org.eclipse.core.runtime.NullProgressMonitor(), null };
+                                }
+                            } else {
+                                args = new Object[] { d, eclipsePath, gmfFormat, 
+                                    new org.eclipse.core.runtime.NullProgressMonitor() };
+                            }
+                            
+                            if (isStatic) {
+                                method.invoke(null, args);
+                            } else {
+                                CopyToImageUtil util = new CopyToImageUtil();
+                                method.invoke(util, args);
+                            }
+                            
+                            System.out.println("exported (GMF): " + outFile);
+                            r.exported++;
+                        } catch (java.lang.IllegalArgumentException ex) {
+                            System.err.println("GMF: argument type mismatch for " + stem + ": " + ex);
+                            r.failed++;
+                        } catch (java.lang.NullPointerException ex) {
+                            // Common when TransactionalEditingDomain is not initialized
+                            System.err.println("GMF: NullPointerException for " + stem);
+                            System.err.println("  Cause: " + ex.getMessage());
+                            if (ex.getMessage() != null && ex.getMessage().contains("editingDomain")) {
+                                System.err.println("  Note: GMF export requires TransactionalEditingDomain (editing framework)");
+                                System.err.println("        This is not available in headless Papyrus export mode.");
+                                System.err.println("        Consider using Sirius-based diagrams (.aird) instead of GMF (.notation).");
+                            }
+                            r.failed++;
+                        } catch (java.lang.reflect.InvocationTargetException ex) {
+                            System.err.println("GMF: export failed for " + stem + ": " + ex.getCause());
                             r.failed++;
                         }
                     } catch (Throwable t) {
@@ -134,6 +223,42 @@ final class GmfExporter {
     }
 
     // ---- helpers ----
+
+    private static java.lang.reflect.Method findCopyToImageMethod(Class<?> utilClass) {
+        // Try to find copyToImage method with different signatures to handle API variations
+        
+        java.lang.reflect.Method[] methods = utilClass.getDeclaredMethods();
+        for (java.lang.reflect.Method m : methods) {
+            if ("copyToImage".equals(m.getName())) {
+                Class<?>[] params = m.getParameterTypes();
+                
+                // Skip methods that expect DiagramEditPart - those require full SWT/UI framework
+                if (params.length >= 1 && params[0].getSimpleName().contains("DiagramEditPart")) {
+                    System.out.println("GMF: skipping incompatible copyToImage (requires DiagramEditPart UI framework)");
+                    continue;
+                }
+                
+                if (params.length == 4 || params.length == 5) {
+                    m.setAccessible(true);
+                    System.out.println("GMF: found compatible copyToImage method with " + params.length + " params: "
+                            + java.util.Arrays.toString(params));
+                    return m;
+                }
+            }
+        }
+        
+        // Log what we found if nothing was compatible
+        System.err.println("GMF: no compatible copyToImage methods found in " + utilClass.getName());
+        System.err.println("GMF: available copyToImage variants:");
+        for (java.lang.reflect.Method m : methods) {
+            if ("copyToImage".equals(m.getName())) {
+                System.err.println("  - expects " + (m.getParameterTypes().length > 0 ? 
+                    m.getParameterTypes()[0].getSimpleName() : "?") + " (incompatible)");
+            }
+        }
+        
+        return null;
+    }
 
     private static Collection<Diagram> collectDiagrams(Resource res) {
         Collection<Diagram> out = new java.util.ArrayList<>();
