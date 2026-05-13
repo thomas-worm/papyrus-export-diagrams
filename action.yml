@@ -69,11 +69,6 @@ runs:
         mkdir -p "${BUILD_DIR}/staging"
         cp -r "${PLUGIN_SRC}"/src/main/resources/* "${BUILD_DIR}/staging/"
 
-        # Compile against every JAR in the Papyrus install. Wildcard classpath
-        # would be cleaner but javac doesn't expand globs from -cp arguments;
-        # find + tr is the portable workaround.
-        CP=$(find "${PAPYRUS_HOME}/plugins" -name '*.jar' | tr '\n' ':')
-
         # Papyrus 7.x ships JustJ Java 21; compile to 21 to match.
         # The JustJ JRE lives under ${PAPYRUS_HOME}/plugins/org.eclipse.justj.openjdk.hotspot.jre.full.linux.x86_64_*/jre/bin/
         JUSTJ_JAVAC=$(find "${PAPYRUS_HOME}/plugins" -path '*/jre/bin/javac' -type f -executable | head -n1 || true)
@@ -82,8 +77,13 @@ runs:
           JUSTJ_JAVAC="$(command -v javac)"
         fi
         echo "Using javac: ${JUSTJ_JAVAC}"
-        "${JUSTJ_JAVAC}" --release 21 -d "${BUILD_DIR}/staging" -cp "${CP}" \
-            $(find "${PLUGIN_SRC}/src/main/java" -name '*.java')
+
+        # Use wildcard classpath to avoid "Argument list too long" errors when
+        # there are many JARs. Java supports * wildcard in classpaths.
+        # Store the list of source files in a response file to handle large projects.
+        find "${PLUGIN_SRC}/src/main/java" -name '*.java' > "${BUILD_DIR}/sources.txt"
+        "${JUSTJ_JAVAC}" --release 21 -d "${BUILD_DIR}/staging" -cp "${PAPYRUS_HOME}/plugins/*" \
+            @"${BUILD_DIR}/sources.txt"
 
         jar cfm "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar" \
             "${BUILD_DIR}/staging/META-INF/MANIFEST.MF" \
