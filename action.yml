@@ -82,7 +82,7 @@ runs:
         # there are many JARs. Java supports * wildcard in classpaths.
         # Store the list of source files in a response file to handle large projects.
         find "${PLUGIN_SRC}/src/main/java" -name '*.java' > "${BUILD_DIR}/sources.txt"
-        "${JUSTJ_JAVAC}" --release 21 -d "${BUILD_DIR}/staging" -cp "${PAPYRUS_HOME}/plugins/*" \
+        "${JUSTJ_JAVAC}" --release 21 -proc:none -d "${BUILD_DIR}/staging" -cp "${PAPYRUS_HOME}/plugins/*" \
             @"${BUILD_DIR}/sources.txt"
 
         jar cfm "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar" \

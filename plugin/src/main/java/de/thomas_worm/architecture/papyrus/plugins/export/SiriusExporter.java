@@ -27,7 +27,7 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.sirius.business.api.dialect.DialectManager;
 import org.eclipse.sirius.business.api.session.Session;
 import org.eclipse.sirius.business.api.session.SessionManager;
-import org.eclipse.sirius.ext.swt.ImageFileFormat;
+import org.eclipse.sirius.common.tools.api.resource.ImageFileFormat;
 import org.eclipse.sirius.ui.business.api.dialect.DialectUIManager;
 import org.eclipse.sirius.ui.business.api.dialect.ExportFormat;
 import org.eclipse.sirius.ui.business.api.dialect.ExportFormat.ExportDocumentFormat;
@@ -162,12 +162,12 @@ final class SiriusExporter {
         if (!useId && desc.getName() != null && !desc.getName().isBlank()) {
             base = desc.getName().trim().replaceAll("[^A-Za-z0-9._-]+", "_");
         } else {
-            String id = desc.getId();
+            // Use the EMF URI fragment as a stable identifier (getId() was removed in newer Sirius).
+            String id = desc.eResource() != null
+                    ? desc.eResource().getURIFragment(desc)
+                    : "representation";
             if (id == null || id.isBlank()) {
-                // Fall back to the EMF fragment if Sirius didn't assign an id yet.
-                id = desc.eResource() != null
-                        ? desc.eResource().getURIFragment(desc)
-                        : "representation";
+                id = "representation";
             }
             base = id.replaceAll("[^A-Za-z0-9._-]+", "_");
         }

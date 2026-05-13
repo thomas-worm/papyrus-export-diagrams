@@ -25,26 +25,13 @@ package de.thomas_worm.architecture.papyrus.plugins.export;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.stream.Stream;
 
-import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
-import org.eclipse.emf.common.util.URI;
-import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.resource.Resource;
-import org.eclipse.emf.ecore.resource.ResourceSet;
-import org.eclipse.emf.ecore.resource.impl.ResourceSetImpl;
-import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
-import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
-import org.eclipse.gmf.runtime.diagram.ui.render.util.CopyToImageUtil;
-import org.eclipse.gmf.runtime.notation.Diagram;
 
 public class ExportApplication implements IApplication {
 
@@ -79,7 +66,6 @@ public class ExportApplication implements IApplication {
         }
         Files.createDirectories(outDir);
 
-        ImageFileFormat gmfFormat = parseGmfFormat(format);
         String fileExt = format.toLowerCase(Locale.ROOT);
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
@@ -103,50 +89,15 @@ public class ExportApplication implements IApplication {
         int sirius_skipped = 0;
 
         // ---- 1. Legacy GMF diagrams via *.notation next to *.di --------
-        try (Stream<Path> walk = Files.walk(modelDir)) {
-            List<Path> diFiles = walk
-                    .filter(p -> p.getFileName().toString().endsWith(".di"))
-                    .sorted()
-                    .toList();
-
-            for (Path di : diFiles) {
-                String base = stripExtension(di.getFileName().toString());
-                Path notation = di.resolveSibling(base + ".notation");
-                if (!Files.exists(notation)) continue;
-
-                Resource res;
-                ResourceSet rs = new ResourceSetImpl();
-                try {
-                    res = rs.getResource(URI.createFileURI(notation.toAbsolutePath().toString()), true);
-                    Path uml = di.resolveSibling(base + ".uml");
-                    if (Files.exists(uml)) {
-                        rs.getResource(URI.createFileURI(uml.toAbsolutePath().toString()), true);
-                    }
-                    EcoreUtil.resolveAll(rs);
-                } catch (Exception e) {
-                    System.err.println("failed to load " + notation + ": " + e);
-                    failed++;
-                    continue;
-                }
-
-                Set<String> usedNames = new HashSet<>();
-                for (Diagram d : collectDiagrams(res)) {
-                    String stem = filenameFor(d, naming, usedNames);
-                    Path outFile = outDir.resolve(stem + "." + fileExt);
-                    try {
-                        new CopyToImageUtil().copyToImage(
-                                d,
-                                org.eclipse.core.runtime.Path.fromOSString(outFile.toString()),
-                                gmfFormat,
-                                new NullProgressMonitor());
-                        System.out.println("exported (GMF): " + outFile);
-                        exported++;
-                    } catch (Throwable t) {
-                        System.err.println("failed to export GMF diagram " + stem + ": " + t);
-                        failed++;
-                    }
-                }
-            }
+        try {
+            GmfExporter.Result gmfResult = GmfExporter.exportNotations(
+                    modelDir, outDir, format, naming == Naming.XMI_ID, fileExt);
+            exported += gmfResult.exported;
+            failed   += gmfResult.failed;
+        } catch (LinkageError e) {
+            System.err.println("GMF classes not available: " + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("Unexpected error during GMF export: " + t);
         }
 
         // ---- 2. Sirius representations via *.aird ------------------------
@@ -176,8 +127,11 @@ public class ExportApplication implements IApplication {
                             aird, outDir, format, naming == Naming.XMI_ID, fileExt);
                     exported += r.exported;
                     failed   += r.failed;
-                } catch (NoClassDefFoundError | LinkageError e) {
+                } catch (NoClassDefFoundError e) {
                     System.err.println("Sirius classes not loadable for " + aird + ": " + e);
+                    sirius_skipped++;
+                } catch (LinkageError e) {
+                    System.err.println("Sirius linkage error for " + aird + ": " + e);
                     sirius_skipped++;
                 } catch (Throwable t) {
                     System.err.println("Unexpected failure exporting Sirius file "
@@ -207,42 +161,5 @@ public class ExportApplication implements IApplication {
             }
         }
         return all;
-    }
-
-    private static List<Diagram> collectDiagrams(Resource res) {
-        List<Diagram> out = new ArrayList<>();
-        for (EObject o : res.getContents()) {
-            if (o instanceof Diagram d) out.add(d);
-        }
-        return out;
-    }
-
-    private static String filenameFor(Diagram d, Naming naming, Set<String> used) {
-        String base;
-        if (naming == Naming.NAME && d.getName() != null && !d.getName().isBlank()) {
-            base = d.getName().trim().replaceAll("[^A-Za-z0-9._-]+", "_");
-        } else {
-            String id = EcoreUtil.getURI(d).fragment();
-            base = (id == null ? "diagram" : id).replaceAll("[^A-Za-z0-9._-]+", "_");
-        }
-        String candidate = base;
-        int n = 1;
-        while (!used.add(candidate)) {
-            candidate = base + "_" + (++n);
-        }
-        return candidate;
-    }
-
-    private static String stripExtension(String name) {
-        int dot = name.lastIndexOf('.');
-        return dot < 0 ? name : name.substring(0, dot);
-    }
-
-    private static ImageFileFormat parseGmfFormat(String s) {
-        try { return ImageFileFormat.valueOf(s); }
-        catch (IllegalArgumentException e) {
-            System.err.println("Unknown format '" + s + "', falling back to SVG");
-            return ImageFileFormat.SVG;
-        }
     }
 }
