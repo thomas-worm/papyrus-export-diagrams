@@ -27,6 +27,7 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.util.EcoreUtil;
+import org.eclipse.emf.transaction.TransactionalEditingDomain;
 import org.eclipse.gmf.runtime.diagram.core.preferences.PreferencesHint;
 import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
 import org.eclipse.gmf.runtime.diagram.ui.render.util.CopyToImageUtil;
@@ -95,7 +96,15 @@ final class GmfExporter {
         // been registered with a ServicesRegistry. Bring both up here.
         ServicesRegistry registry = new ServicesRegistry();
         ModelSet modelSet = new ModelSet();
+        TransactionalEditingDomain editingDomain;
         try {
+            // ModelSet inherits from a transactional resource set but
+            // does not create its TransactionalEditingDomain itself —
+            // in stock Papyrus a separate IService does. We bind one
+            // here so TransactionUtil.getEditingDomain(diagram) returns
+            // it during GMF rendering.
+            editingDomain = TransactionalEditingDomain.Factory.INSTANCE
+                    .createEditingDomain(modelSet);
             registry.add(ModelSet.class, 10, modelSet);
             registry.startRegistry();
         } catch (Throwable t) {
@@ -173,6 +182,7 @@ final class GmfExporter {
             }
         } finally {
             try { registry.disposeRegistry(); } catch (Throwable ignore) { }
+            try { editingDomain.dispose(); } catch (Throwable ignore) { }
         }
     }
 
