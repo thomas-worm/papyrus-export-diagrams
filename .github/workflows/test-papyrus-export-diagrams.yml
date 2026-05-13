@@ -1,5 +1,4 @@
 name: "Test: papyrus-export-diagrams"
-description: "Test the papyrus-export-diagrams action by running it on a sample Papyrus model and checking the output images."
 
 on:
   push: {}
@@ -14,7 +13,7 @@ jobs:
     name: "Test papyrus-export-diagrams action"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Papyrus
         id: papyrus
@@ -28,13 +27,22 @@ jobs:
           model-dir:    model
           output-dir:   model_images
 
-      - name: Check exported images
+      - name: Show exported images
         run: |
           echo "Exported diagrams: ${{ steps.export.outputs.exported-count }}"
-          echo "Failed exports: ${{ steps.export.outputs.failed-count }}"
-          ls -l ${{ runner.temp }}/exported-diagrams
+          echo "Failed exports:    ${{ steps.export.outputs.failed-count }}"
+          ls -lR model_images || true
+
+      - name: Upload export log on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: papyrus-export-log
+          path: ${{ runner.temp }}/papyrus-export.log
+          if-no-files-found: warn
 
       - name: Commit and push changes
+        if: ${{ github.event_name == 'push' }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
