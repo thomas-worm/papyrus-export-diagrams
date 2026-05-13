@@ -29,9 +29,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
 
+import org.eclipse.core.databinding.observable.Realm;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
+import org.eclipse.jface.databinding.swt.DisplayRealm;
+import org.eclipse.swt.widgets.Display;
 
 public class ExportApplication implements IApplication {
 
@@ -85,86 +88,89 @@ public class ExportApplication implements IApplication {
             } catch (Throwable ignore) { }
         }
 
-        int exported = 0;
-        int failed   = 0;
-        int sirius_skipped = 0;
+        // SWT-side setup: Papyrus's GMF edit parts construct EMF databinding
+        // observables in their .activate() path. AbstractObservableValue's
+        // constructor asserts that Realm.getDefault() is non-null — outside
+        // a workbench, nobody else sets that up for us, so we have to.
+        // We also obtain the Display eagerly so both GMF (which creates the
+        // off-screen Shell on whatever the SWT thread is) and Sirius (which
+        // schedules onto Display.getDefault()) share the same one.
+        final Display display = Display.getDefault();
+        final Realm realm = DisplayRealm.getRealm(display);
 
-        // ---- 1. Legacy GMF diagrams via *.notation next to *.di --------
-        try {
-            GmfExporter.Result gmfResult = GmfExporter.exportNotations(
-                    modelDir, outDir, format, naming == Naming.XMI_ID, fileExt);
-            exported += gmfResult.exported;
-            failed   += gmfResult.failed;
-        } catch (LinkageError e) {
-            System.err.println("GMF classes not available: " + e.getMessage());
-        } catch (Throwable t) {
-            System.err.println("Unexpected error during GMF export: " + t);
-        }
+        final int[] exported = { 0 };
+        final int[] failed   = { 0 };
+        final int[] siriusSkipped = { 0 };
+        final Path modelDirFinal = modelDir;
+        final Path outDirFinal   = outDir;
+        final String formatFinal = format;
+        final String fileExtFinal = fileExt;
+        final boolean useId = naming == Naming.XMI_ID;
 
-        // ---- 2. Sirius representations via *.aird ------------------------
-        boolean siriusAvailable = Platform.getBundle("org.eclipse.sirius") != null
-                              && Platform.getBundle("org.eclipse.sirius.ui") != null;
-
-        try (Stream<Path> walk = Files.walk(modelDir)) {
-            List<Path> airds = walk
-                    .filter(p -> p.getFileName().toString().endsWith(".aird"))
-                    .sorted()
-                    .toList();
-
-            for (Path aird : airds) {
-                if (!siriusAvailable) {
-                    System.err.println("WARNING: Sirius representations container "
-                            + aird + " was found, but the Sirius bundles are not "
-                            + "present in this Papyrus install. Skipping.");
-                    sirius_skipped++;
-                    continue;
-                }
-                try {
-                    // Loading SiriusExporter forces classloading of Sirius
-                    // classes; catching NoClassDefFoundError here means a
-                    // stripped-down install (no Sirius) still gets through
-                    // the GMF pipeline above.
-                    SiriusExporter.Result r = SiriusExporter.exportAird(
-                            aird, outDir, format, naming == Naming.XMI_ID, fileExt);
-                    exported += r.exported;
-                    failed   += r.failed;
-                } catch (NoClassDefFoundError e) {
-                    System.err.println("WARNING: Sirius export unavailable for " + aird);
-                    System.err.println("  Missing class: " + e);
-                    System.err.println("  Note: Papyrus Desktop 7.1.0 may not include full Sirius bundles.");
-                    System.err.println("        Ensure org.eclipse.sirius* plugins are installed if needed.");
-                    sirius_skipped++;
-                } catch (LinkageError e) {
-                    System.err.println("Sirius linkage error for " + aird + ": " + e);
-                    sirius_skipped++;
-                } catch (Throwable t) {
-                    System.err.println("Unexpected failure exporting Sirius file "
-                            + aird + ": " + t);
-                    failed++;
-                }
+        Realm.runWithDefault(realm, () -> {
+            // ---- 1. Legacy GMF diagrams via *.notation next to *.di --------
+            try {
+                GmfExporter.Result gmfResult = GmfExporter.exportNotations(
+                        modelDirFinal, outDirFinal, formatFinal, useId, fileExtFinal);
+                exported[0] += gmfResult.exported;
+                failed[0]   += gmfResult.failed;
+            } catch (LinkageError e) {
+                System.err.println("GMF classes not available: " + e.getMessage());
+            } catch (Throwable t) {
+                System.err.println("Unexpected error during GMF export: " + t);
+                t.printStackTrace(System.err);
             }
-        }
 
-        System.out.println("Done. exported=" + exported
-                + " failed=" + failed
+            // ---- 2. Sirius representations via *.aird ------------------------
+            boolean siriusAvailable = Platform.getBundle("org.eclipse.sirius") != null
+                                  && Platform.getBundle("org.eclipse.sirius.ui") != null;
+
+            try (Stream<Path> walk = Files.walk(modelDirFinal)) {
+                List<Path> airds = walk
+                        .filter(p -> p.getFileName().toString().endsWith(".aird"))
+                        .sorted()
+                        .toList();
+
+                for (Path aird : airds) {
+                    if (!siriusAvailable) {
+                        System.err.println("WARNING: Sirius representations container "
+                                + aird + " was found, but the Sirius bundles are not "
+                                + "present in this Papyrus install. Skipping.");
+                        siriusSkipped[0]++;
+                        continue;
+                    }
+                    try {
+                        SiriusExporter.Result rs = SiriusExporter.exportAird(
+                                aird, outDirFinal, formatFinal, useId, fileExtFinal);
+                        exported[0] += rs.exported;
+                        failed[0]   += rs.failed;
+                    } catch (NoClassDefFoundError e) {
+                        System.err.println("WARNING: Sirius export unavailable for " + aird);
+                        System.err.println("  Missing class: " + e);
+                        siriusSkipped[0]++;
+                    } catch (LinkageError e) {
+                        System.err.println("Sirius linkage error for " + aird + ": " + e);
+                        siriusSkipped[0]++;
+                    } catch (Throwable t) {
+                        System.err.println("Unexpected failure exporting Sirius file "
+                                + aird + ": " + t);
+                        t.printStackTrace(System.err);
+                        failed[0]++;
+                    }
+                }
+            } catch (java.io.IOException ioe) {
+                System.err.println("I/O error while scanning " + modelDirFinal + ": " + ioe);
+                failed[0]++;
+            }
+        });
+
+        int sirius_skipped = siriusSkipped[0];
+
+        System.out.println("Done. exported=" + exported[0]
+                + " failed=" + failed[0]
                 + " sirius_skipped=" + sirius_skipped);
-        
-        // Provide diagnostic info when nothing was exported
-        if (exported == 0) {
-            if (failed > 0 && sirius_skipped == 0) {
-                System.out.println("ERROR: All diagrams failed to export. Check .notation file compatibility.");
-                System.out.println("  GMF export requires TransactionalEditingDomain (not available in headless mode).");
-            } else if (sirius_skipped > 0 && failed == 0) {
-                System.out.println("Note: No exports completed. Sirius bundles not available in this Papyrus install.");
-                System.out.println("  To enable Sirius export, install org.eclipse.sirius* plugins.");
-            } else if (failed > 0 && sirius_skipped > 0) {
-                System.out.println("ERROR: Both GMF and Sirius export failed:");
-                System.out.println("  - GMF (.notation): Requires editing domain (headless limitation)");
-                System.out.println("  - Sirius (.aird): Missing required bundles");
-            }
-        }
-        
-        int exitCode = failed == 0 ? 0 : 1;
+
+        int exitCode = failed[0] == 0 ? 0 : 1;
         System.out.println("Forcing application shutdown with exit code: " + exitCode);
         exitWithCode(exitCode, context);
         return Integer.valueOf(exitCode);

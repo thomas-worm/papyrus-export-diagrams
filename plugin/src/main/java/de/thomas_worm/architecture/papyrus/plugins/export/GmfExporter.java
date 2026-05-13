@@ -1,10 +1,11 @@
 /*
  * GMF-specific export helper.
  *
- * Encapsulates all GMF diagram export logic. Each .di file is loaded into a
- * fresh TransactionalEditingDomain so CopyToImageUtil can locate it via
- * TransactionUtil.getEditingDomain(diagram) — without that domain in place
- * the renderer NPEs deep inside its off-screen edit-part setup.
+ * Each *.di file is loaded into a Papyrus ModelSet wired to a fresh
+ * ServicesRegistry. Papyrus's GMF edit parts call
+ * ServiceUtilsForResourceSet.getServiceRegistry(rs) during refresh and
+ * require both — a plain TransactionalEditingDomain alone makes them
+ * throw ServiceNotFoundException and the renderer aborts mid-traversal.
  */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
@@ -25,13 +26,13 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
-import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.util.EcoreUtil;
-import org.eclipse.emf.transaction.TransactionalEditingDomain;
 import org.eclipse.gmf.runtime.diagram.core.preferences.PreferencesHint;
 import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
 import org.eclipse.gmf.runtime.diagram.ui.render.util.CopyToImageUtil;
 import org.eclipse.gmf.runtime.notation.Diagram;
+import org.eclipse.papyrus.infra.core.resource.ModelSet;
+import org.eclipse.papyrus.infra.core.services.ServicesRegistry;
 
 final class GmfExporter {
 
@@ -88,27 +89,52 @@ final class GmfExporter {
     private static void exportOneNotation(Path notation, Path di, String base, Path outDir,
                                           ImageFileFormat gmfFormat, String ext, boolean useId,
                                           Method copyToImage, Result r) {
-        // CopyToImageUtil resolves the editing domain via
-        // TransactionUtil.getEditingDomain(diagram) — which walks the resource
-        // set's adapter list looking for the TransactionalEditingDomain adapter.
-        // We must therefore load the diagram into a ResourceSet that already
-        // has an editing domain attached to it (createEditingDomain() owns
-        // its own ResourceSet and attaches itself as the required adapter).
-        TransactionalEditingDomain editingDomain =
-                TransactionalEditingDomain.Factory.INSTANCE.createEditingDomain();
+        // Papyrus diagrams refresh themselves by calling
+        // ServiceUtilsForResourceSet.getServiceRegistry(rs), which only
+        // succeeds when the resource set is a Papyrus ModelSet that has
+        // been registered with a ServicesRegistry. Bring both up here.
+        ServicesRegistry registry = new ServicesRegistry();
+        ModelSet modelSet = new ModelSet();
         try {
-            ResourceSet rs = editingDomain.getResourceSet();
+            registry.add(ModelSet.class, 10, modelSet);
+            registry.startRegistry();
+        } catch (Throwable t) {
+            System.err.println("GMF: failed to start Papyrus services for "
+                    + notation + ": " + t);
+            t.printStackTrace(System.err);
+            r.failed++;
+            return;
+        }
+
+        try {
             Resource notationRes;
             try {
-                notationRes = rs.getResource(
-                        URI.createFileURI(notation.toAbsolutePath().toString()), true);
-                Path uml = di.resolveSibling(base + ".uml");
-                if (Files.exists(uml)) {
-                    rs.getResource(URI.createFileURI(uml.toAbsolutePath().toString()), true);
+                // Load the .di first if loadModels(URI) is available — it
+                // wires up the di/uml/notation triplet through Papyrus's
+                // IModel implementations. Fall back to loading the notation
+                // and uml resources directly if that overload is absent or
+                // throws.
+                URI diURI = URI.createFileURI(di.toAbsolutePath().toString());
+                try {
+                    Method loadModels = ModelSet.class.getMethod("loadModels", URI.class);
+                    loadModels.invoke(modelSet, diURI);
+                } catch (NoSuchMethodException nsme) {
+                    Path uml = di.resolveSibling(base + ".uml");
+                    if (Files.exists(uml)) {
+                        modelSet.getResource(
+                                URI.createFileURI(uml.toAbsolutePath().toString()), true);
+                    }
+                    modelSet.getResource(
+                            URI.createFileURI(notation.toAbsolutePath().toString()), true);
                 }
-                EcoreUtil.resolveAll(rs);
+                notationRes = modelSet.getResource(
+                        URI.createFileURI(notation.toAbsolutePath().toString()), true);
+                EcoreUtil.resolveAll(modelSet);
             } catch (Exception e) {
-                System.err.println("GMF: failed to load notation " + notation + ": " + e);
+                Throwable cause = e instanceof InvocationTargetException ite && ite.getCause() != null
+                        ? ite.getCause() : e;
+                System.err.println("GMF: failed to load notation " + notation + ": " + cause);
+                cause.printStackTrace(System.err);
                 r.failed++;
                 return;
             }
@@ -146,7 +172,7 @@ final class GmfExporter {
                 }
             }
         } finally {
-            try { editingDomain.dispose(); } catch (Throwable ignore) { }
+            try { registry.disposeRegistry(); } catch (Throwable ignore) { }
         }
     }
 
