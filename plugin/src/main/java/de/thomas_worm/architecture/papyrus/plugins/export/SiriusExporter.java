@@ -112,8 +112,14 @@ final class SiriusExporter {
 
         // Rewrite any FontStyle entries that reference a font the JVM
         // can't find — the source model was edited on macOS and uses
-        // .AppleSystemUIFont, which has no Linux equivalent.
-        FontFallback.remap(session.getAllSessionResources());
+        // .AppleSystemUIFont, which has no Linux equivalent. Failures
+        // are non-fatal; we still try to render with the original fonts.
+        try {
+            FontFallback.remap(session.getTransactionalEditingDomain(),
+                    session.getAllSessionResources());
+        } catch (Throwable t) {
+            System.err.println("Sirius: font remap failed (continuing with original fonts): " + t);
+        }
 
         // Build a map from DRepresentation -> backing GMF Diagram by scanning
         // every loaded session resource. Sirius stores Diagrams alongside the

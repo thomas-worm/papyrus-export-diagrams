@@ -45,6 +45,11 @@ public class ExportApplication implements IApplication {
 
     @Override
     public Object start(IApplicationContext context) throws Exception {
+        // Last-resort kill switch: if anything in the pipeline (workbench
+        // bring-up, export, shutdown) wedges, halt the JVM so the runner
+        // doesn't have to reap us at the 180s watchdog with no diagnostic.
+        scheduleForceHalt(99, 10 * 60 * 1000);
+
         String[] all = (String[]) context.getArguments()
                 .get(IApplicationContext.APPLICATION_ARGS);
         String[] args = stripBeforeDoubleDash(all);
@@ -128,7 +133,7 @@ public class ExportApplication implements IApplication {
         // refuses to stop cleanly, which the runner watchdog then reaps
         // 180s later. Schedule a hard halt() that fires if normal shutdown
         // takes longer than 5s.
-        scheduleForceHalt(exitCode);
+        scheduleForceHalt(exitCode, 5_000);
         return Integer.valueOf(exitCode);
     }
 
@@ -162,11 +167,12 @@ public class ExportApplication implements IApplication {
         }
     }
 
-    private static void scheduleForceHalt(int code) {
+    private static void scheduleForceHalt(int code, long delayMillis) {
         Thread t = new Thread("ForceHalt") {
             @Override
             public void run() {
-                try { Thread.sleep(5000); } catch (InterruptedException ignore) { return; }
+                try { Thread.sleep(delayMillis); } catch (InterruptedException ignore) { return; }
+                System.err.println("ForceHalt: aborting JVM after " + delayMillis + "ms");
                 Runtime.getRuntime().halt(code);
             }
         };
@@ -224,6 +230,11 @@ public class ExportApplication implements IApplication {
                 t.printStackTrace(System.err);
                 counters.failed++;
             } finally {
+                // Backup halt for the case where workbench.close() itself
+                // hangs (e.g. on a bundle's Activator.stop()) — without
+                // this the runner watchdog would have to reap us 180s
+                // later with no diagnostic.
+                scheduleForceHalt(counters.failed == 0 ? 0 : 1, 30_000);
                 try { PlatformUI.getWorkbench().close(); } catch (Throwable ignore) { }
             }
         }

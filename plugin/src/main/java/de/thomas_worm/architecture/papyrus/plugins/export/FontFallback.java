@@ -25,6 +25,8 @@ import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
+import org.eclipse.emf.transaction.RecordingCommand;
+import org.eclipse.emf.transaction.TransactionalEditingDomain;
 import org.eclipse.gmf.runtime.notation.FontStyle;
 
 final class FontFallback {
@@ -52,15 +54,28 @@ final class FontFallback {
 
     /**
      * Walk every {@link FontStyle} in the supplied resources and replace
-     * any unavailable font name with the configured fallback.
-     * Returns the number of rewrites performed.
+     * any unavailable font name with the configured fallback. Mutations
+     * run inside a {@link RecordingCommand} on {@code editingDomain} so
+     * the transactional resource set doesn't reject the writes. Returns
+     * the number of rewrites performed.
      */
-    static int remap(Iterable<? extends Resource> resources) {
+    static int remap(TransactionalEditingDomain editingDomain,
+                     Iterable<? extends Resource> resources) {
         FontFallback ff = new FontFallback();
         System.out.println("FontFallback: using '" + ff.fallback
                 + "' for unavailable fonts (" + ff.available.size() + " families on classpath)");
-        for (Resource res : resources) {
-            ff.remapResource(res);
+        Runnable body = () -> {
+            for (Resource res : resources) {
+                ff.remapResource(res);
+            }
+        };
+        if (editingDomain != null) {
+            editingDomain.getCommandStack().execute(new RecordingCommand(editingDomain, "Remap fonts") {
+                @Override
+                protected void doExecute() { body.run(); }
+            });
+        } else {
+            body.run();
         }
         if (ff.rewrites > 0) {
             System.out.println("FontFallback: rewrote " + ff.rewrites + " FontStyle entries");

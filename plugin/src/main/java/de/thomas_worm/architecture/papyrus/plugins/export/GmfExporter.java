@@ -139,7 +139,6 @@ final class GmfExporter {
                 notationRes = modelSet.getResource(
                         URI.createFileURI(notation.toAbsolutePath().toString()), true);
                 EcoreUtil.resolveAll(modelSet);
-                FontFallback.remap(modelSet.getResources());
             } catch (Exception e) {
                 Throwable cause = e instanceof InvocationTargetException ite && ite.getCause() != null
                         ? ite.getCause() : e;
@@ -147,6 +146,17 @@ final class GmfExporter {
                 cause.printStackTrace(System.err);
                 r.failed++;
                 return;
+            }
+
+            // Non-fatal: rewrite any FontStyle that refers to a font the
+            // JVM can't find (e.g. .AppleSystemUIFont on Linux). If this
+            // can't run for some reason, we still try to render with the
+            // original fonts — labels may overflow but the diagram still
+            // exports.
+            try {
+                FontFallback.remap(editingDomain, modelSet.getResources());
+            } catch (Throwable t) {
+                System.err.println("GMF: font remap failed (continuing with original fonts): " + t);
             }
 
             Set<String> usedNames = new HashSet<>();
