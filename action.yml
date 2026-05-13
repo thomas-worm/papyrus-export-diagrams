@@ -138,12 +138,11 @@ runs:
         "${LAUNCHER}" -nosplash -consoleLog \
             -application de.thomas_worm.architecture.papyrus.plugins.export.app \
             -data "${WORKSPACE_DIR}" \
-            -vmargs -Djava.awt.headless=false \
-            -- \
             --modelDir "${MODEL_DIR}" \
-            --outDir   "${OUT_DIR}" \
-            --format   "${EXPORT_FORMAT}" \
-            --naming   "${NAMING_MODE}" \
+            --outDir "${OUT_DIR}" \
+            --format "${EXPORT_FORMAT}" \
+            --naming "${NAMING_MODE}" \
+            -vmargs -Djava.awt.headless=false \
             2>&1 | tee "${RUNNER_TEMP}/papyrus-export.log"
         RC=${PIPESTATUS[0]}
         set -e

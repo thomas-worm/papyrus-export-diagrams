@@ -62,6 +62,7 @@ public class ExportApplication implements IApplication {
         if (modelDir == null || outDir == null) {
             System.err.println("usage: --modelDir <dir> --outDir <dir> "
                     + "[--format SVG|PNG|JPEG|BMP|GIF|PDF] [--naming xmiId|name]");
+            System.exit(2);
             return Integer.valueOf(2);
         }
         Files.createDirectories(outDir);
@@ -144,7 +145,9 @@ public class ExportApplication implements IApplication {
         System.out.println("Done. exported=" + exported
                 + " failed=" + failed
                 + " sirius_skipped=" + sirius_skipped);
-        return failed == 0 ? IApplication.EXIT_OK : Integer.valueOf(1);
+        int exitCode = failed == 0 ? 0 : 1;
+        System.exit(exitCode);
+        return exitCode;
     }
 
     @Override public void stop() { /* nothing */ }
@@ -153,6 +156,7 @@ public class ExportApplication implements IApplication {
 
     private static String[] stripBeforeDoubleDash(String[] all) {
         if (all == null) return new String[0];
+        // Look for a literal "--" separator and return everything after it
         for (int i = 0; i < all.length; i++) {
             if ("--".equals(all[i])) {
                 String[] out = new String[all.length - i - 1];
@@ -160,6 +164,11 @@ public class ExportApplication implements IApplication {
                 return out;
             }
         }
-        return all;
+        // No "--" found; if first arg starts with "--", assume these are app args (not launcher args)
+        if (all.length > 0 && all[0].startsWith("--")) {
+            return all;
+        }
+        // Otherwise return empty array (no recognized args)
+        return new String[0];
     }
 }
