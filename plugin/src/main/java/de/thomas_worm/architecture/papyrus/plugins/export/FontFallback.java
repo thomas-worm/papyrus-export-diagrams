@@ -31,6 +31,34 @@ import org.eclipse.gmf.runtime.notation.FontStyle;
 
 final class FontFallback {
 
+    /**
+     * After Batik writes the SVG, the JVM's logical "Dialog" font ends
+     * up declared on the root &lt;svg&gt; element as the family for
+     * unstyled text — viewers don't know "Dialog" and substitute their
+     * default sans, which gives inconsistent widths across platforms.
+     * Replace it with the resolved fallback so every text node points
+     * at a real, widely-available family.
+     */
+    static void postProcessSvg(java.nio.file.Path svgFile) {
+        if (svgFile == null) return;
+        String name = svgFile.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".svg")) return;
+        FontFallback ff = new FontFallback();
+        try {
+            String content = java.nio.file.Files.readString(svgFile);
+            String replaced = content.replace(
+                    "font-family=\"'Dialog'\"",
+                    "font-family=\"'" + ff.fallback + "'\"");
+            if (!replaced.equals(content)) {
+                java.nio.file.Files.writeString(svgFile, replaced);
+            }
+        } catch (Throwable t) {
+            System.err.println("FontFallback: SVG post-process failed for "
+                    + svgFile + ": " + t);
+        }
+    }
+
+
     // Search order for replacing an unavailable font. The first family in
     // this list that the JVM actually has wins. Arial / Liberation Sans
     // are metric-compatible with each other and roughly with Helvetica

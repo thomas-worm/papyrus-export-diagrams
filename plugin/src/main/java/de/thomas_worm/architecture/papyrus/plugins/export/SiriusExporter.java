@@ -35,6 +35,8 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
+import org.eclipse.emf.transaction.RecordingCommand;
+import org.eclipse.emf.transaction.TransactionalEditingDomain;
 import org.eclipse.gmf.runtime.diagram.core.preferences.PreferencesHint;
 import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
 import org.eclipse.gmf.runtime.diagram.ui.render.util.CopyToImageUtil;
@@ -145,10 +147,23 @@ final class SiriusExporter {
             if (rep == null) continue;
 
             // Refresh the representation so the GMF Diagram reflects the
-            // current state of the semantic model. Failures are tolerated
-            // — the unrefreshed diagram still renders.
+            // current state of the semantic model. DialectManager.refresh
+            // mutates the model and therefore needs a write transaction —
+            // wrap it in a RecordingCommand so the call doesn't trip the
+            // transactional-resource-set guard. Failures are tolerated;
+            // we fall back to whatever's already in the .aird.
             try {
-                DialectManager.INSTANCE.refresh(rep, monitor);
+                final TransactionalEditingDomain ted = session.getTransactionalEditingDomain();
+                if (ted != null) {
+                    ted.getCommandStack().execute(new RecordingCommand(ted, "Refresh representation") {
+                        @Override
+                        protected void doExecute() {
+                            DialectManager.INSTANCE.refresh(rep, monitor);
+                        }
+                    });
+                } else {
+                    DialectManager.INSTANCE.refresh(rep, monitor);
+                }
             } catch (Throwable t) {
                 System.err.println("Sirius: refresh failed for " + safeName(desc)
                         + " (continuing with stale diagram): " + t);
@@ -188,6 +203,7 @@ final class SiriusExporter {
                     } else {
                         copyToImage.invoke(util, args);
                     }
+                    FontFallback.postProcessSvg(outFile);
                     System.out.println("exported (Sirius/GMF): " + outFile);
                     exportedCount.incrementAndGet();
                 } catch (Throwable t) {

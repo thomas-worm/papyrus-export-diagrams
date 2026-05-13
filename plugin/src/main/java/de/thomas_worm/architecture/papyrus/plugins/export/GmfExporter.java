@@ -178,6 +178,7 @@ final class GmfExporter {
                     } else {
                         copyToImage.invoke(util, args);
                     }
+                    FontFallback.postProcessSvg(outFile);
                     System.out.println("exported (GMF): " + outFile);
                     r.exported++;
                 } catch (InvocationTargetException ex) {
