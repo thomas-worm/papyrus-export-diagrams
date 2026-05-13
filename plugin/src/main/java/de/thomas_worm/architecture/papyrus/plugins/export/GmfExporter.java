@@ -9,9 +9,11 @@
  */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -106,6 +108,15 @@ final class GmfExporter {
             editingDomain = TransactionalEditingDomain.Factory.INSTANCE
                     .createEditingDomain(modelSet);
             registry.add(ModelSet.class, 10, modelSet);
+            // PapyrusDiagramEditPart.refresh() looks up an
+            // IMultiDiagramEditor in the registry during rendering.
+            // We don't have one — we're rendering off-screen — but
+            // missing it logs a "ServiceNotFoundException: Unexpected
+            // Error" stack trace every time. Register a no-op proxy
+            // so the lookup succeeds; refresh() ends up with the same
+            // null/default values it would have used after catching
+            // the exception, just without the noise.
+            registerNoopMultiDiagramEditor(registry);
             registry.startRegistry();
         } catch (Throwable t) {
             System.err.println("GMF: failed to start Papyrus services for "
@@ -199,6 +210,38 @@ final class GmfExporter {
     }
 
     // ---- helpers ----
+
+    @SuppressWarnings("unchecked")
+    private static void registerNoopMultiDiagramEditor(ServicesRegistry registry) {
+        try {
+            Class<?> editorIface = Class.forName(
+                    "org.eclipse.papyrus.infra.ui.editor.IMultiDiagramEditor");
+            InvocationHandler handler = (proxy, method, args) -> {
+                Class<?> ret = method.getReturnType();
+                if ("getServicesRegistry".equals(method.getName())) return registry;
+                if (ret == boolean.class) return Boolean.FALSE;
+                if (ret == byte.class)    return (byte) 0;
+                if (ret == short.class)   return (short) 0;
+                if (ret == int.class)     return 0;
+                if (ret == long.class)    return 0L;
+                if (ret == float.class)   return 0f;
+                if (ret == double.class)  return 0d;
+                if (ret == char.class)    return '\0';
+                return null;
+            };
+            Object stub = Proxy.newProxyInstance(
+                    editorIface.getClassLoader(),
+                    new Class<?>[] { editorIface },
+                    handler);
+            registry.add((Class<Object>) editorIface, 1, stub);
+        } catch (ClassNotFoundException e) {
+            // Bundle without the editor interface (Papyrus Classic without
+            // the multi-diagram editor) — nothing to register, nothing to
+            // log against.
+        } catch (Throwable t) {
+            System.err.println("Could not register no-op IMultiDiagramEditor: " + t);
+        }
+    }
 
     private static Method findCopyToImageMethod() {
         // CopyToImageUtil has several overloads; we want one that takes a
