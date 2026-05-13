@@ -14,14 +14,24 @@
  */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
+import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.imageio.ImageIO;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
@@ -39,6 +49,9 @@ final class FontFallback {
      * Replace it with the resolved fallback so every text node points
      * at a real, widely-available family.
      */
+    /** Resolution multiplier applied to each embedded raster image. */
+    private static final int RASTER_UPSCALE = 4;
+
     static void postProcessSvg(java.nio.file.Path svgFile) {
         if (svgFile == null) return;
         String name = svgFile.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -46,16 +59,83 @@ final class FontFallback {
         FontFallback ff = new FontFallback();
         try {
             String content = java.nio.file.Files.readString(svgFile);
-            String replaced = content.replace(
+            String original = content;
+
+            // (a) Resolve Java's logical "Dialog" family to a real font.
+            content = content.replace(
                     "font-family=\"'Dialog'\"",
                     "font-family=\"'" + ff.fallback + "'\"");
-            if (!replaced.equals(content)) {
-                java.nio.file.Files.writeString(svgFile, replaced);
+
+            // (b) Tell viewers to interpolate the embedded PNGs instead
+            // of nearest-neighbouring them.
+            content = content.replace(
+                    "image-rendering=\"auto\"",
+                    "image-rendering=\"optimizeQuality\"");
+
+            // (c) Upscale every embedded raster image to RASTER_UPSCALE×
+            // its native resolution using bicubic interpolation. The
+            // SVG display dimensions (the <image> width/height) stay
+            // the same — only the PNG inside the data: URL has more
+            // pixels, so zooming in shows interpolated rather than
+            // blocky output.
+            content = upscaleEmbeddedPngs(content, RASTER_UPSCALE);
+
+            if (!content.equals(original)) {
+                java.nio.file.Files.writeString(svgFile, content);
             }
         } catch (Throwable t) {
             System.err.println("FontFallback: SVG post-process failed for "
                     + svgFile + ": " + t);
         }
+    }
+
+    private static final Pattern PNG_DATA_URL = Pattern.compile(
+            "(xlink:href=\")data:image/png;base64,([A-Za-z0-9+/=\\s&;#]+?)(\")",
+            Pattern.DOTALL);
+
+    private static String upscaleEmbeddedPngs(String svg, int factor) {
+        if (factor <= 1) return svg;
+        Matcher m = PNG_DATA_URL.matcher(svg);
+        StringBuilder out = new StringBuilder(svg.length());
+        int upscaled = 0;
+        while (m.find()) {
+            String pre = m.group(1);
+            String b64 = m.group(2).replaceAll("[\\s]|&#10;|&#13;", "");
+            String post = m.group(3);
+            String replacement = m.group(0); // fallback
+            try {
+                byte[] bytes = Base64.getDecoder().decode(b64);
+                BufferedImage src = ImageIO.read(new ByteArrayInputStream(bytes));
+                if (src != null) {
+                    int w = src.getWidth() * factor;
+                    int h = src.getHeight() * factor;
+                    BufferedImage scaled = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+                    Graphics2D g = scaled.createGraphics();
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                            RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                    g.setRenderingHint(RenderingHints.KEY_RENDERING,
+                            RenderingHints.VALUE_RENDER_QUALITY);
+                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                            RenderingHints.VALUE_ANTIALIAS_ON);
+                    g.drawImage(src, 0, 0, w, h, null);
+                    g.dispose();
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    ImageIO.write(scaled, "PNG", baos);
+                    String newB64 = Base64.getEncoder().encodeToString(baos.toByteArray());
+                    replacement = pre + "data:image/png;base64," + newB64 + post;
+                    upscaled++;
+                }
+            } catch (Throwable t) {
+                // Leave the original data URL alone if anything fails.
+            }
+            m.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        if (upscaled > 0) {
+            System.out.println("SvgPostProcess: upscaled " + upscaled
+                    + " embedded raster image(s) " + factor + "×");
+        }
+        return out.toString();
     }
 
 

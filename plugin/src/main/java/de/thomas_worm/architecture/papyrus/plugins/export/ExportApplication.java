@@ -154,6 +154,13 @@ public class ExportApplication implements IApplication {
                 putPreference(node, key, "classic");
             }
         }
+
+        // Anti-aliasing on. Without this GMF rasterises shape figures
+        // (SVGFigure raster fallback path) with one-pixel-wide aliased
+        // edges, which is why Sirius diagrams with Papyrus's symbol
+        // shapes (actor, use case) showed visible staircase pixels.
+        putPreference("org.eclipse.gmf.runtime.diagram.ui",
+                "Appearance.enableAntiAlias", "true");
     }
 
     private static void putPreference(String node, String key, String value) {
@@ -165,6 +172,11 @@ public class ExportApplication implements IApplication {
             // Preference node may not exist on a Papyrus build that doesn't
             // ship the corresponding bundle; that's fine.
         }
+        try {
+            org.eclipse.core.runtime.preferences.IEclipsePreferences defaults =
+                    org.eclipse.core.runtime.preferences.DefaultScope.INSTANCE.getNode(node);
+            defaults.put(key, value);
+        } catch (Throwable ignore) { }
     }
 
     private static void scheduleForceHalt(int code, long delayMillis) {
