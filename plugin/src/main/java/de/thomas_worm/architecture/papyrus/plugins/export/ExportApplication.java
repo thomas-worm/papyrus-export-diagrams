@@ -30,6 +30,8 @@ import java.util.Locale;
 import java.util.stream.Stream;
 
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.preferences.IEclipsePreferences;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
 import org.eclipse.swt.widgets.Display;
@@ -72,6 +74,13 @@ public class ExportApplication implements IApplication {
         Files.createDirectories(outDir);
 
         String fileExt = format.toLowerCase(Locale.ROOT);
+
+        // Pin the diagram-rendering theme to "classic" so headless output
+        // matches the look the user picked in the Papyrus GUI editor.
+        // We set every preference node that Papyrus / Eclipse have been
+        // observed to read this from; whichever one the runtime actually
+        // consults wins, the rest are no-ops.
+        applyThemePreferences();
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
         // varies slightly across patch releases and across Desktop vs Classic.
@@ -121,6 +130,36 @@ public class ExportApplication implements IApplication {
         // takes longer than 5s.
         scheduleForceHalt(exitCode);
         return Integer.valueOf(exitCode);
+    }
+
+    private static void applyThemePreferences() {
+        // Eclipse-wide theme: classic == no E4 CSS theme, native look.
+        putPreference("org.eclipse.e4.ui.css.swt.theme", "themeid",
+                "org.eclipse.e4.ui.css.theme.e4_classic");
+
+        // Papyrus diagram CSS / styling theme. The preference key has
+        // shifted across Papyrus minor versions, so set every plausible
+        // candidate to "classic" and let the actual reader pick.
+        for (String node : new String[] {
+                "org.eclipse.papyrus.infra.gmfdiag.css",
+                "org.eclipse.papyrus.infra.gmfdiag.style",
+                "org.eclipse.papyrus.uml.diagram.css",
+        }) {
+            for (String key : new String[] { "theme", "currentTheme", "theme.id", "themeId" }) {
+                putPreference(node, key, "classic");
+            }
+        }
+    }
+
+    private static void putPreference(String node, String key, String value) {
+        try {
+            IEclipsePreferences prefs = InstanceScope.INSTANCE.getNode(node);
+            prefs.put(key, value);
+            prefs.flush();
+        } catch (Throwable t) {
+            // Preference node may not exist on a Papyrus build that doesn't
+            // ship the corresponding bundle; that's fine.
+        }
     }
 
     private static void scheduleForceHalt(int code) {

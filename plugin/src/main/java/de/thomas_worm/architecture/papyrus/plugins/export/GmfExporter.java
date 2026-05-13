@@ -139,6 +139,7 @@ final class GmfExporter {
                 notationRes = modelSet.getResource(
                         URI.createFileURI(notation.toAbsolutePath().toString()), true);
                 EcoreUtil.resolveAll(modelSet);
+                FontFallback.remap(modelSet.getResources());
             } catch (Exception e) {
                 Throwable cause = e instanceof InvocationTargetException ite && ite.getCause() != null
                         ? ite.getCause() : e;

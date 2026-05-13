@@ -16,10 +16,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install fonts for diagram rendering
+        # Models authored on macOS often store fonts like .AppleSystemUIFont
+        # or Helvetica that don't exist on Linux. Install Microsoft and
+        # metric-compatible alternatives so the headless renderer measures
+        # labels with the same widths as the GUI editor.
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
+          set -eu
           sudo apt-get update -y
+          # ttf-mscorefonts-installer needs the contrib repo and EULA accept.
+          echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true \
+            | sudo debconf-set-selections
           sudo apt-get install -y --no-install-recommends \
-            fonts-liberation fonts-dejavu fonts-noto fontconfig
+            fonts-liberation fonts-liberation2 fonts-dejavu fonts-noto fonts-noto-cjk \
+            fonts-crosextra-carlito fonts-crosextra-caladea ttf-mscorefonts-installer \
+            fontconfig
           sudo fc-cache -f
 
       - name: Set up Papyrus

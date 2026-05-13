@@ -110,6 +110,11 @@ final class SiriusExporter {
             return r;
         }
 
+        // Rewrite any FontStyle entries that reference a font the JVM
+        // can't find — the source model was edited on macOS and uses
+        // .AppleSystemUIFont, which has no Linux equivalent.
+        FontFallback.remap(session.getAllSessionResources());
+
         // Build a map from DRepresentation -> backing GMF Diagram by scanning
         // every loaded session resource. Sirius stores Diagrams alongside the
         // DDiagrams in the .aird (or its sub-resources); a Diagram references
