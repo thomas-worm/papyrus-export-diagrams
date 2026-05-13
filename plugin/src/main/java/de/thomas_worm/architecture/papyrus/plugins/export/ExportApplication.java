@@ -115,9 +115,24 @@ public class ExportApplication implements IApplication {
         System.out.println("Workbench return code: " + returnCode);
 
         int exitCode = counters.failed == 0 ? 0 : 1;
-        System.out.println("Forcing application shutdown with exit code: " + exitCode);
-        exitWithCode(exitCode, context);
+        // Eclipse's OSGi shutdown is occasionally stuck on a bundle that
+        // refuses to stop cleanly, which the runner watchdog then reaps
+        // 180s later. Schedule a hard halt() that fires if normal shutdown
+        // takes longer than 5s.
+        scheduleForceHalt(exitCode);
         return Integer.valueOf(exitCode);
+    }
+
+    private static void scheduleForceHalt(int code) {
+        Thread t = new Thread("ForceHalt") {
+            @Override
+            public void run() {
+                try { Thread.sleep(5000); } catch (InterruptedException ignore) { return; }
+                Runtime.getRuntime().halt(code);
+            }
+        };
+        t.setDaemon(true);
+        t.start();
     }
 
     static final class Counters {

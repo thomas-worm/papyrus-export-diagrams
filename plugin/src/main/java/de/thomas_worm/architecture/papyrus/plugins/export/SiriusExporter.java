@@ -129,6 +129,32 @@ final class SiriusExporter {
                     System.out.println("exported (Sirius): " + outFile);
                     exportedCount.incrementAndGet();
                 } catch (Throwable t) {
+                    if (siriusFormat == ImageFileFormat.SVG && isSvgFigureCastFailure(t)) {
+                        // Sirius's SVG generator paints embedded SVGFigure
+                        // instances by casting the outer Graphics to
+                        // SiriusGraphicsSVG. When a Papyrus-style diagram
+                        // recurses through SiriusRenderedMapModeGraphics
+                        // wrappers (common for compartments with shape
+                        // providers), the cast fails. PNG export goes
+                        // through the raster path and renders cleanly.
+                        Path pngOut = outDir.resolve(stem + ".png");
+                        org.eclipse.core.runtime.IPath pngPath =
+                                org.eclipse.core.runtime.Path.fromOSString(pngOut.toString());
+                        ExportFormat pngFormat = new ExportFormat(
+                                ExportDocumentFormat.NONE, ImageFileFormat.PNG);
+                        try {
+                            DialectUIManager.INSTANCE.export(rep, session, pngPath, pngFormat,
+                                    new NullProgressMonitor());
+                            System.err.println("Sirius: SVG export hit known cast bug "
+                                    + "with embedded SVG figures for " + stem
+                                    + " — wrote PNG fallback instead: " + pngOut);
+                            exportedCount.incrementAndGet();
+                            return;
+                        } catch (Throwable t2) {
+                            System.err.println("Sirius: PNG fallback also failed for "
+                                    + stem + ": " + t2);
+                        }
+                    }
                     System.err.println("Sirius: failed to export " + stem + ": " + t);
                     failedCount.incrementAndGet();
                 }
@@ -144,6 +170,19 @@ final class SiriusExporter {
     }
 
     // ---------------- helpers ----------------
+
+    private static boolean isSvgFigureCastFailure(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur instanceof ClassCastException
+                    && cur.getMessage() != null
+                    && cur.getMessage().contains("SiriusGraphicsSVG")) {
+                return true;
+            }
+            // Avoid infinite loops on cyclic causes.
+            if (cur.getCause() == cur) break;
+        }
+        return false;
+    }
 
     private static Display getOrCreateDisplay() {
         Display d = Display.getCurrent();
