@@ -59,12 +59,9 @@ runs:
         BUILD_DIR:    ${{ steps.paths.outputs.build-dir }}
       run: |
         set -euxo pipefail
-        # If a previous run on a cached Papyrus install already dropped our
-        # bundle in, skip the rebuild.
-        if compgen -G "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_*.jar" > /dev/null; then
-          echo "Headless export plugin already present in the install, skipping build."
-          exit 0
-        fi
+        # Always rebuild — the Papyrus install is reused across runs from the
+        # tool cache, so any previous bundle would otherwise mask new source.
+        rm -f "${PAPYRUS_HOME}/plugins"/de.thomas_worm.architecture.papyrus.plugins.export_*.jar
 
         mkdir -p "${BUILD_DIR}/staging"
         cp -r "${PLUGIN_SRC}"/src/main/resources/* "${BUILD_DIR}/staging/"
@@ -147,9 +144,11 @@ runs:
             2>&1 | tee "${RUNNER_TEMP}/papyrus-export.log" &
         LAUNCHER_PID=$!
         
-        # Monitor process: kill if silent for 30+ seconds, but reset timer on new output
+        # Monitor process: kill if it produces no new output for this many
+        # seconds. OSGi bring-up plus GMF's off-screen edit-part construction
+        # can take well over a minute on a cold cache, so be generous.
         LAST_OUTPUT_TIME=$(date +%s)
-        SILENCE_THRESHOLD=30
+        SILENCE_THRESHOLD=180
         while kill -0 $LAUNCHER_PID 2>/dev/null; do
             sleep 1
             CURRENT_TIME=$(date +%s)
