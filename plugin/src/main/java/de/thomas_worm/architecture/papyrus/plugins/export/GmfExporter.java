@@ -28,6 +28,7 @@ import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.emf.transaction.TransactionalEditingDomain;
+import org.eclipse.gmf.runtime.diagram.core.preferences.PreferencesHint;
 import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
 import org.eclipse.gmf.runtime.diagram.ui.render.util.CopyToImageUtil;
 import org.eclipse.gmf.runtime.notation.Diagram;
@@ -53,8 +54,15 @@ final class GmfExporter {
         Method copyToImage = findCopyToImageMethod();
         if (copyToImage == null) {
             System.err.println("GMF: no compatible CopyToImageUtil.copyToImage(Diagram,...) method on classpath");
+            System.err.println("GMF: available overloads:");
+            for (Method m : CopyToImageUtil.class.getMethods()) {
+                if ("copyToImage".equals(m.getName())) {
+                    System.err.println("  - " + m);
+                }
+            }
             return r;
         }
+        System.out.println("GMF: using " + copyToImage);
 
         try (Stream<Path> walk = Files.walk(modelDir)) {
             List<Path> diFiles = walk
@@ -112,7 +120,13 @@ final class GmfExporter {
                 Path outFile = outDir.resolve(stem + "." + ext);
                 IPath eclipsePath = org.eclipse.core.runtime.Path.fromOSString(outFile.toString());
                 try {
-                    Object[] args = new Object[] { d, eclipsePath, gmfFormat, new NullProgressMonitor() };
+                    Object[] args;
+                    if (copyToImage.getParameterCount() == 5) {
+                        args = new Object[] { d, eclipsePath, gmfFormat,
+                                new NullProgressMonitor(), PreferencesHint.USE_DEFAULTS };
+                    } else {
+                        args = new Object[] { d, eclipsePath, gmfFormat, new NullProgressMonitor() };
+                    }
                     if (Modifier.isStatic(copyToImage.getModifiers())) {
                         copyToImage.invoke(null, args);
                     } else {
@@ -139,19 +153,28 @@ final class GmfExporter {
     // ---- helpers ----
 
     private static Method findCopyToImageMethod() {
-        // CopyToImageUtil has several overloads; we want the
-        // (Diagram, IPath, ImageFileFormat, IProgressMonitor) variant.
-        // The DiagramEditPart-typed overloads expect a pre-built edit part,
-        // which we don't have in headless mode.
+        // CopyToImageUtil has several overloads; we want one that takes a
+        // Diagram (not a DiagramEditPart, which would require a pre-built
+        // edit part we don't have in headless mode). The 4-arg variant is
+        // (Diagram, IPath, ImageFileFormat, IProgressMonitor); the 5-arg
+        // variant adds a trailing PreferencesHint. Prefer 5-arg when both
+        // exist — it lets us pass USE_DEFAULTS so styling preferences are
+        // initialised even outside a workbench.
+        Method match4 = null;
+        Method match5 = null;
         for (Method m : CopyToImageUtil.class.getMethods()) {
             if (!"copyToImage".equals(m.getName())) continue;
             Class<?>[] params = m.getParameterTypes();
-            if (params.length != 4) continue;
+            if (params.length != 4 && params.length != 5) continue;
             if (!Diagram.class.isAssignableFrom(params[0])) continue;
             m.setAccessible(true);
-            return m;
+            if (params.length == 5) {
+                match5 = m;
+            } else {
+                match4 = m;
+            }
         }
-        return null;
+        return match5 != null ? match5 : match4;
     }
 
     private static Collection<Diagram> collectDiagrams(Resource res) {

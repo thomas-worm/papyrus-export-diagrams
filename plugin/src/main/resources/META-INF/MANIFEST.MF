@@ -13,6 +13,7 @@ Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.emf.ecore.xmi,
  org.eclipse.emf.transaction,
  org.eclipse.gmf.runtime.notation,
+ org.eclipse.gmf.runtime.diagram.core;resolution:=optional,
  org.eclipse.gmf.runtime.diagram.ui;resolution:=optional,
  org.eclipse.gmf.runtime.diagram.ui.render;resolution:=optional,
  org.eclipse.uml2.uml,
@@ -22,3 +23,4 @@ Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.sirius.diagram;resolution:=optional,
  org.eclipse.sirius.diagram.ui;resolution:=optional,
  org.eclipse.sirius.ext.swt;resolution:=optional
+DynamicImport-Package: *
