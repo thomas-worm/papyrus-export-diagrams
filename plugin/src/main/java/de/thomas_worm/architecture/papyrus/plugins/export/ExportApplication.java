@@ -29,12 +29,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
 
-import org.eclipse.core.databinding.observable.Realm;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
-import org.eclipse.jface.databinding.swt.DisplayRealm;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.application.IWorkbenchConfigurer;
+import org.eclipse.ui.application.WorkbenchAdvisor;
 
 public class ExportApplication implements IApplication {
 
@@ -88,32 +89,98 @@ public class ExportApplication implements IApplication {
             } catch (Throwable ignore) { }
         }
 
-        // SWT-side setup: Papyrus's GMF edit parts construct EMF databinding
-        // observables in their .activate() path. AbstractObservableValue's
-        // constructor asserts that Realm.getDefault() is non-null — outside
-        // a workbench, nobody else sets that up for us, so we have to.
-        // We also obtain the Display eagerly so both GMF (which creates the
-        // off-screen Shell on whatever the SWT thread is) and Sirius (which
-        // schedules onto Display.getDefault()) share the same one.
-        final Display display = Display.getDefault();
-        final Realm realm = DisplayRealm.getRealm(display);
-
-        final int[] exported = { 0 };
-        final int[] failed   = { 0 };
-        final int[] siriusSkipped = { 0 };
-        final Path modelDirFinal = modelDir;
-        final Path outDirFinal   = outDir;
-        final String formatFinal = format;
-        final String fileExtFinal = fileExt;
+        // Papyrus's GMF edit parts hard-reference PlatformUI.getWorkbench()
+        // from static initializers (e.g. ArchitectureFrameworkCustomizationManagerUpdater)
+        // so we cannot just run our pipeline straight from IApplication.
+        // Instead, spin up a real workbench under Xvfb, do the export from
+        // the advisor's postStartup() callback, then close the workbench.
+        final Counters counters = new Counters();
         final boolean useId = naming == Naming.XMI_ID;
+        final ExportAdvisor advisor = new ExportAdvisor(
+                modelDir, outDir, format, fileExt, useId, counters);
 
-        Realm.runWithDefault(realm, () -> {
+        final Display display = PlatformUI.createDisplay();
+        int returnCode;
+        try {
+            returnCode = PlatformUI.createAndRunWorkbench(display, advisor);
+        } finally {
+            if (!display.isDisposed()) {
+                try { display.dispose(); } catch (Throwable ignore) { }
+            }
+        }
+
+        System.out.println("Done. exported=" + counters.exported
+                + " failed=" + counters.failed
+                + " sirius_skipped=" + counters.siriusSkipped);
+        System.out.println("Workbench return code: " + returnCode);
+
+        int exitCode = counters.failed == 0 ? 0 : 1;
+        System.out.println("Forcing application shutdown with exit code: " + exitCode);
+        exitWithCode(exitCode, context);
+        return Integer.valueOf(exitCode);
+    }
+
+    static final class Counters {
+        int exported;
+        int failed;
+        int siriusSkipped;
+    }
+
+    /**
+     * WorkbenchAdvisor that runs the entire export from postStartup() and
+     * immediately closes the workbench. Returning null from the perspective
+     * lookup leaves the initial window without an open perspective, which
+     * the workbench tolerates and skips the perspective-bar UI for.
+     */
+    static final class ExportAdvisor extends WorkbenchAdvisor {
+        private final Path modelDir;
+        private final Path outDir;
+        private final String format;
+        private final String fileExt;
+        private final boolean useId;
+        private final Counters counters;
+
+        ExportAdvisor(Path modelDir, Path outDir, String format, String fileExt,
+                      boolean useId, Counters counters) {
+            this.modelDir = modelDir;
+            this.outDir = outDir;
+            this.format = format;
+            this.fileExt = fileExt;
+            this.useId = useId;
+            this.counters = counters;
+        }
+
+        @Override
+        public String getInitialWindowPerspectiveId() {
+            return null;
+        }
+
+        @Override
+        public void initialize(IWorkbenchConfigurer configurer) {
+            super.initialize(configurer);
+            configurer.setSaveAndRestore(false);
+        }
+
+        @Override
+        public void postStartup() {
+            try {
+                runExport();
+            } catch (Throwable t) {
+                System.err.println("Export aborted: " + t);
+                t.printStackTrace(System.err);
+                counters.failed++;
+            } finally {
+                try { PlatformUI.getWorkbench().close(); } catch (Throwable ignore) { }
+            }
+        }
+
+        private void runExport() {
             // ---- 1. Legacy GMF diagrams via *.notation next to *.di --------
             try {
                 GmfExporter.Result gmfResult = GmfExporter.exportNotations(
-                        modelDirFinal, outDirFinal, formatFinal, useId, fileExtFinal);
-                exported[0] += gmfResult.exported;
-                failed[0]   += gmfResult.failed;
+                        modelDir, outDir, format, useId, fileExt);
+                counters.exported += gmfResult.exported;
+                counters.failed   += gmfResult.failed;
             } catch (LinkageError e) {
                 System.err.println("GMF classes not available: " + e.getMessage());
             } catch (Throwable t) {
@@ -125,7 +192,7 @@ public class ExportApplication implements IApplication {
             boolean siriusAvailable = Platform.getBundle("org.eclipse.sirius") != null
                                   && Platform.getBundle("org.eclipse.sirius.ui") != null;
 
-            try (Stream<Path> walk = Files.walk(modelDirFinal)) {
+            try (Stream<Path> walk = Files.walk(modelDir)) {
                 List<Path> airds = walk
                         .filter(p -> p.getFileName().toString().endsWith(".aird"))
                         .sorted()
@@ -136,44 +203,33 @@ public class ExportApplication implements IApplication {
                         System.err.println("WARNING: Sirius representations container "
                                 + aird + " was found, but the Sirius bundles are not "
                                 + "present in this Papyrus install. Skipping.");
-                        siriusSkipped[0]++;
+                        counters.siriusSkipped++;
                         continue;
                     }
                     try {
                         SiriusExporter.Result rs = SiriusExporter.exportAird(
-                                aird, outDirFinal, formatFinal, useId, fileExtFinal);
-                        exported[0] += rs.exported;
-                        failed[0]   += rs.failed;
+                                aird, outDir, format, useId, fileExt);
+                        counters.exported += rs.exported;
+                        counters.failed   += rs.failed;
                     } catch (NoClassDefFoundError e) {
                         System.err.println("WARNING: Sirius export unavailable for " + aird);
                         System.err.println("  Missing class: " + e);
-                        siriusSkipped[0]++;
+                        counters.siriusSkipped++;
                     } catch (LinkageError e) {
                         System.err.println("Sirius linkage error for " + aird + ": " + e);
-                        siriusSkipped[0]++;
+                        counters.siriusSkipped++;
                     } catch (Throwable t) {
                         System.err.println("Unexpected failure exporting Sirius file "
                                 + aird + ": " + t);
                         t.printStackTrace(System.err);
-                        failed[0]++;
+                        counters.failed++;
                     }
                 }
             } catch (java.io.IOException ioe) {
-                System.err.println("I/O error while scanning " + modelDirFinal + ": " + ioe);
-                failed[0]++;
+                System.err.println("I/O error while scanning " + modelDir + ": " + ioe);
+                counters.failed++;
             }
-        });
-
-        int sirius_skipped = siriusSkipped[0];
-
-        System.out.println("Done. exported=" + exported[0]
-                + " failed=" + failed[0]
-                + " sirius_skipped=" + sirius_skipped);
-
-        int exitCode = failed[0] == 0 ? 0 : 1;
-        System.out.println("Forcing application shutdown with exit code: " + exitCode);
-        exitWithCode(exitCode, context);
-        return Integer.valueOf(exitCode);
+        }
     }
 
     private void exitWithCode(int code, IApplicationContext context) {
