@@ -61,9 +61,11 @@ Two export pipelines run in sequence over `model-dir`:
 
 - **Legacy GMF diagrams** (`*.notation` next to `*.di`) are rendered through
   GMF's `CopyToImageUtil`. SVG, PNG, JPEG, BMP, GIF, PDF all supported.
-- **Sirius representations** (`*.aird`) are rendered through Sirius's
-  `DialectUIManager.export`, run on the SWT UI thread under Xvfb. SVG, PNG,
-  JPEG, BMP, GIF supported; PDF falls back to SVG with a warning.
+- **Sirius representations** (`*.aird`) are opened via Sirius (to refresh the
+  representation against the current semantic model), then the backing GMF
+  `Diagram` is fed into the same `CopyToImageUtil`. Avoids a cast bug in
+  Sirius's own SVG generator that triggers whenever a representation
+  contains embedded SVG figures. Full SVG/PNG/JPEG/BMP/GIF/PDF support.
 
 Filenames combine both pipelines into the same flat `output-dir`. With
 `naming: xmiId` you get notation `xmi:id`s for GMF diagrams and Sirius

@@ -1,43 +1,53 @@
 /*
  * Sirius-specific export helper.
  *
- * Kept in a separate class so that, if any of the optional Sirius bundles is
- * missing at runtime, the resulting NoClassDefFoundError happens here (where
- * the caller catches it) instead of breaking the legacy GMF export path.
+ * Each *.aird file is opened via Sirius's SessionManager to get the
+ * representations refreshed against the current semantic model. After
+ * that we don't go through DialectUIManager.export — its SVG generator
+ * has a fixed cast to SiriusGraphicsSVG that breaks when the diagram
+ * contains embedded SVG figures recursed through MapModeGraphics. We
+ * instead resolve the backing GMF Diagram for each representation and
+ * push it through GMF's CopyToImageUtil, the same path the *.notation
+ * pipeline uses — produces real vector SVG and supports the full
+ * format set (SVG/PNG/JPEG/BMP/GIF/PDF).
  *
- * The export pipeline:
- *   1. SessionManager.INSTANCE.getSession(airdURI, monitor)
- *   2. session.open(monitor)
- *   3. DialectManager.INSTANCE.getAllRepresentationDescriptors(session)
- *   4. For each descriptor: DialectUIManager.INSTANCE.export(rep, session, path, format, monitor)
- *      — must run on the SWT UI thread, so we wrap with Display.syncExec.
+ * Kept in a separate class so that, if any of the optional Sirius
+ * bundles is missing at runtime, the resulting NoClassDefFoundError
+ * happens here (where the caller catches it) rather than during GMF
+ * loading.
  */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.Locale;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.resource.Resource;
+import org.eclipse.gmf.runtime.diagram.core.preferences.PreferencesHint;
+import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
+import org.eclipse.gmf.runtime.diagram.ui.render.util.CopyToImageUtil;
+import org.eclipse.gmf.runtime.notation.Diagram;
 import org.eclipse.sirius.business.api.dialect.DialectManager;
 import org.eclipse.sirius.business.api.session.Session;
 import org.eclipse.sirius.business.api.session.SessionManager;
-import org.eclipse.sirius.common.tools.api.resource.ImageFileFormat;
-import org.eclipse.sirius.ui.business.api.dialect.DialectUIManager;
-import org.eclipse.sirius.ui.business.api.dialect.ExportFormat;
-import org.eclipse.sirius.ui.business.api.dialect.ExportFormat.ExportDocumentFormat;
 import org.eclipse.sirius.viewpoint.DRepresentation;
 import org.eclipse.sirius.viewpoint.DRepresentationDescriptor;
 import org.eclipse.swt.widgets.Display;
 
 final class SiriusExporter {
 
-    /** Result of a batch export. */
     static final class Result {
         int exported;
         int failed;
@@ -50,13 +60,26 @@ final class SiriusExporter {
      *
      * @param aird     absolute path to the .aird representation container
      * @param outDir   target directory (already created by the caller)
-     * @param format   one of SVG, PNG, JPEG, BMP, GIF — mapped to Sirius's ImageFileFormat
-     * @param useId    true: filename = descriptor's UUID; false: filename = descriptor's name (sanitised)
+     * @param format   one of SVG, PNG, JPEG, BMP, GIF, PDF
+     * @param useId    true: filename = descriptor's UUID; false: descriptor name (sanitised)
      * @param ext      file extension to use (lowercased format string from the caller)
-     * @return per-aird counters
      */
     static Result exportAird(Path aird, Path outDir, String format, boolean useId, String ext) {
         Result r = new Result();
+
+        ImageFileFormat gmfFormat = parseGmfFormat(format);
+        if (gmfFormat == null) {
+            System.err.println("Sirius: unsupported format " + format);
+            r.failed++;
+            return r;
+        }
+
+        Method copyToImage = findCopyToImageMethod();
+        if (copyToImage == null) {
+            System.err.println("Sirius: no compatible CopyToImageUtil.copyToImage(Diagram,...) on classpath");
+            r.failed++;
+            return r;
+        }
 
         URI airdURI = URI.createFileURI(aird.toAbsolutePath().toString());
         IProgressMonitor monitor = new NullProgressMonitor();
@@ -78,9 +101,6 @@ final class SiriusExporter {
             return r;
         }
 
-        ImageFileFormat siriusFormat = parseSiriusFormat(format);
-        ExportFormat exportFormat = new ExportFormat(ExportDocumentFormat.NONE, siriusFormat);
-
         Collection<DRepresentationDescriptor> descriptors;
         try {
             descriptors = DialectManager.INSTANCE.getAllRepresentationDescriptors(session);
@@ -90,16 +110,20 @@ final class SiriusExporter {
             return r;
         }
 
+        // Build a map from DRepresentation -> backing GMF Diagram by scanning
+        // every loaded session resource. Sirius stores Diagrams alongside the
+        // DDiagrams in the .aird (or its sub-resources); a Diagram references
+        // its DDiagram via diagram.getElement().
+        Map<EObject, Diagram> repToDiagram = collectGmfDiagramsByElement(session);
+
         Set<String> usedNames = new HashSet<>();
-        // The export has to run on the UI thread; collect work first, run inside syncExec.
         final Display display = getOrCreateDisplay();
         final AtomicInteger exportedCount = new AtomicInteger();
         final AtomicInteger failedCount   = new AtomicInteger();
 
         for (DRepresentationDescriptor desc : descriptors) {
-            DRepresentation rep;
+            final DRepresentation rep;
             try {
-                // Lazy load — only resolved on demand.
                 rep = desc.getRepresentation();
             } catch (Throwable t) {
                 System.err.println("Sirius: cannot resolve representation for descriptor "
@@ -109,59 +133,61 @@ final class SiriusExporter {
             }
             if (rep == null) continue;
 
-            // DialectUIManager filters out reps it can't handle. We check first so
-            // we can produce a clearer log line and don't waste a UI-thread round trip.
-            if (!DialectUIManager.INSTANCE.canHandle(rep)) {
-                System.err.println("Sirius: skipping unsupported representation "
-                        + safeName(desc) + " (" + rep.getClass().getSimpleName() + ")");
+            // Refresh the representation so the GMF Diagram reflects the
+            // current state of the semantic model. Failures are tolerated
+            // — the unrefreshed diagram still renders.
+            try {
+                DialectManager.INSTANCE.refresh(rep, monitor);
+            } catch (Throwable t) {
+                System.err.println("Sirius: refresh failed for " + safeName(desc)
+                        + " (continuing with stale diagram): " + t);
+            }
+
+            // After refresh the map may need to pick up freshly created
+            // Diagrams that weren't there at scan time.
+            Diagram d = repToDiagram.get(rep);
+            if (d == null) {
+                repToDiagram = collectGmfDiagramsByElement(session);
+                d = repToDiagram.get(rep);
+            }
+            if (d == null) {
+                System.err.println("Sirius: no backing GMF Diagram for representation "
+                        + safeName(desc) + " — skipping");
+                failedCount.incrementAndGet();
                 continue;
             }
 
-            String stem = filenameFor(desc, useId, usedNames);
-            Path outFile = outDir.resolve(stem + "." + ext);
-            org.eclipse.core.runtime.IPath outPath =
-                    org.eclipse.core.runtime.Path.fromOSString(outFile.toString());
+            final Diagram diagram = d;
+            final String stem = filenameFor(desc, useId, usedNames);
+            final Path outFile = outDir.resolve(stem + "." + ext);
+            final IPath ePath = org.eclipse.core.runtime.Path.fromOSString(outFile.toString());
 
             display.syncExec(() -> {
                 try {
-                    DialectUIManager.INSTANCE.export(rep, session, outPath, exportFormat,
-                            new NullProgressMonitor());
-                    System.out.println("exported (Sirius): " + outFile);
+                    Object[] args;
+                    if (copyToImage.getParameterCount() == 5) {
+                        args = new Object[] { diagram, ePath, gmfFormat,
+                                new NullProgressMonitor(), PreferencesHint.USE_DEFAULTS };
+                    } else {
+                        args = new Object[] { diagram, ePath, gmfFormat, new NullProgressMonitor() };
+                    }
+                    CopyToImageUtil util = new CopyToImageUtil();
+                    if (Modifier.isStatic(copyToImage.getModifiers())) {
+                        copyToImage.invoke(null, args);
+                    } else {
+                        copyToImage.invoke(util, args);
+                    }
+                    System.out.println("exported (Sirius/GMF): " + outFile);
                     exportedCount.incrementAndGet();
                 } catch (Throwable t) {
-                    if (siriusFormat == ImageFileFormat.SVG && isSvgFigureCastFailure(t)) {
-                        // Sirius's SVG generator paints embedded SVGFigure
-                        // instances by casting the outer Graphics to
-                        // SiriusGraphicsSVG. When a Papyrus-style diagram
-                        // recurses through SiriusRenderedMapModeGraphics
-                        // wrappers (common for compartments with shape
-                        // providers), the cast fails. PNG export goes
-                        // through the raster path and renders cleanly.
-                        Path pngOut = outDir.resolve(stem + ".png");
-                        org.eclipse.core.runtime.IPath pngPath =
-                                org.eclipse.core.runtime.Path.fromOSString(pngOut.toString());
-                        ExportFormat pngFormat = new ExportFormat(
-                                ExportDocumentFormat.NONE, ImageFileFormat.PNG);
-                        try {
-                            DialectUIManager.INSTANCE.export(rep, session, pngPath, pngFormat,
-                                    new NullProgressMonitor());
-                            System.err.println("Sirius: SVG export hit known cast bug "
-                                    + "with embedded SVG figures for " + stem
-                                    + " — wrote PNG fallback instead: " + pngOut);
-                            exportedCount.incrementAndGet();
-                            return;
-                        } catch (Throwable t2) {
-                            System.err.println("Sirius: PNG fallback also failed for "
-                                    + stem + ": " + t2);
-                        }
-                    }
-                    System.err.println("Sirius: failed to export " + stem + ": " + t);
+                    Throwable cause = t.getCause() != null ? t.getCause() : t;
+                    System.err.println("Sirius: failed to export " + stem + ": " + cause);
+                    cause.printStackTrace(System.err);
                     failedCount.incrementAndGet();
                 }
             });
         }
 
-        // Closing the session is good hygiene but we tolerate failures.
         try { session.close(monitor); } catch (Throwable ignore) { }
 
         r.exported = exportedCount.get();
@@ -171,17 +197,46 @@ final class SiriusExporter {
 
     // ---------------- helpers ----------------
 
-    private static boolean isSvgFigureCastFailure(Throwable t) {
-        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
-            if (cur instanceof ClassCastException
-                    && cur.getMessage() != null
-                    && cur.getMessage().contains("SiriusGraphicsSVG")) {
-                return true;
+    private static Map<EObject, Diagram> collectGmfDiagramsByElement(Session session) {
+        Map<EObject, Diagram> map = new IdentityHashMap<>();
+        for (Resource res : session.getAllSessionResources()) {
+            for (Iterator<EObject> it = res.getAllContents(); it.hasNext(); ) {
+                EObject o = it.next();
+                if (o instanceof Diagram d) {
+                    EObject elem = d.getElement();
+                    if (elem != null) map.put(elem, d);
+                }
             }
-            // Avoid infinite loops on cyclic causes.
-            if (cur.getCause() == cur) break;
         }
-        return false;
+        // Some Sirius layouts also publish the diagrams as session-level
+        // semantic resources; walk those too.
+        try {
+            Resource sr = session.getSessionResource();
+            if (sr != null) {
+                for (Iterator<EObject> it = sr.getAllContents(); it.hasNext(); ) {
+                    EObject o = it.next();
+                    if (o instanceof Diagram d) {
+                        EObject elem = d.getElement();
+                        if (elem != null) map.putIfAbsent(elem, d);
+                    }
+                }
+            }
+        } catch (Throwable ignore) { }
+        return map;
+    }
+
+    private static Method findCopyToImageMethod() {
+        Method match4 = null;
+        Method match5 = null;
+        for (Method m : CopyToImageUtil.class.getMethods()) {
+            if (!"copyToImage".equals(m.getName())) continue;
+            Class<?>[] params = m.getParameterTypes();
+            if (params.length != 4 && params.length != 5) continue;
+            if (!Diagram.class.isAssignableFrom(params[0])) continue;
+            m.setAccessible(true);
+            if (params.length == 5) match5 = m; else match4 = m;
+        }
+        return match5 != null ? match5 : match4;
     }
 
     private static Display getOrCreateDisplay() {
@@ -201,7 +256,6 @@ final class SiriusExporter {
         if (!useId && desc.getName() != null && !desc.getName().isBlank()) {
             base = desc.getName().trim().replaceAll("[^A-Za-z0-9._-]+", "_");
         } else {
-            // Use the EMF URI fragment as a stable identifier (getId() was removed in newer Sirius).
             String id = desc.eResource() != null
                     ? desc.eResource().getURIFragment(desc)
                     : "representation";
@@ -218,24 +272,16 @@ final class SiriusExporter {
         return candidate;
     }
 
-    private static ImageFileFormat parseSiriusFormat(String s) {
-        // Sirius's ImageFileFormat uses JPG (not JPEG) as one canonical name,
-        // and additionally supports SVG / SVGZ. Map liberally from user input.
-        String u = s == null ? "SVG" : s.toUpperCase(Locale.ROOT);
-        switch (u) {
-            case "JPEG": case "JPG": return ImageFileFormat.JPG;
-            case "PNG":              return ImageFileFormat.PNG;
-            case "GIF":              return ImageFileFormat.GIF;
-            case "BMP":              return ImageFileFormat.BMP;
-            case "SVG":              return ImageFileFormat.SVG;
-            case "PDF":
-                // Sirius can't export PDF directly via ImageFileFormat in all releases.
-                // We fall back to SVG; the user can convert with rsvg-convert/inkscape.
-                System.err.println("Sirius: PDF not supported, falling back to SVG.");
-                return ImageFileFormat.SVG;
-            default:
-                System.err.println("Sirius: unknown format '" + s + "', falling back to SVG.");
-                return ImageFileFormat.SVG;
-        }
+    private static ImageFileFormat parseGmfFormat(String s) {
+        if (s == null) s = "SVG";
+        return switch (s.toUpperCase()) {
+            case "SVG" -> ImageFileFormat.SVG;
+            case "PNG" -> ImageFileFormat.PNG;
+            case "JPEG", "JPG" -> ImageFileFormat.JPG;
+            case "BMP" -> ImageFileFormat.BMP;
+            case "GIF" -> ImageFileFormat.GIF;
+            case "PDF" -> ImageFileFormat.PDF;
+            default -> null;
+        };
     }
 }

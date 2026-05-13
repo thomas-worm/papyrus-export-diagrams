@@ -15,9 +15,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install fonts for diagram rendering
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            fonts-liberation fonts-dejavu fonts-noto fontconfig
+          sudo fc-cache -f
+
       - name: Set up Papyrus
         id: papyrus
         uses: thomas-worm/setup-papyrus@v1
+
+      - name: Clean previous output
+        # The test workflow commits model_images back to the repo, so each
+        # run sees the previous run's files. Wipe them so we don't leave
+        # orphaned files behind when filenames or formats change.
+        run: rm -rf model_images && mkdir -p model_images
 
       - name: Run export action
         id: export
@@ -42,7 +55,9 @@ jobs:
           if-no-files-found: warn
 
       - name: Commit and push changes
-        if: ${{ github.event_name == 'push' }}
+        # Run on partial export failures too — if anything was rendered,
+        # the user wants those files saved rather than discarded.
+        if: ${{ always() && github.event_name == 'push' }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
