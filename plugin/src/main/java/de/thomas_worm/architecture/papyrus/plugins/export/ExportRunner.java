@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2026 Thomas Worm
+ * SPDX-License-Identifier: MIT
+ */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
 import java.io.IOException;
@@ -23,13 +27,21 @@ import org.eclipse.core.runtime.Platform;
  */
 final class ExportRunner {
 
+    /** Parsed command-line arguments that configure this run. */
     private final ExportArguments arguments;
 
+    /**
+     * @param arguments parsed application arguments
+     */
     ExportRunner(ExportArguments arguments) {
         this.arguments = arguments;
     }
 
-    /** Runs both pipelines and accumulates results into {@code counts}. */
+    /**
+     * Runs both pipelines and accumulates results into {@code counts}.
+     *
+     * @param counts shared counters updated as work progresses
+     */
     void runInto(ExportCounts counts) {
         FontInventory fontInventory = new FontInventory();
         SvgPostProcessor svgPostProcessor = new SvgPostProcessor(fontInventory);
@@ -37,6 +49,14 @@ final class ExportRunner {
         runSiriusPipeline(fontInventory, svgPostProcessor, counts);
     }
 
+    /**
+     * Runs the {@code .notation} pipeline; tolerates any failure so
+     * the caller can still attempt the Sirius pipeline afterwards.
+     *
+     * @param fontInventory shared font inventory
+     * @param svgPostProcessor shared SVG post-processor
+     * @param counts shared counters
+     */
     private void runNotationPipeline(FontInventory fontInventory,
                                      SvgPostProcessor svgPostProcessor,
                                      ExportCounts counts) {
@@ -55,6 +75,15 @@ final class ExportRunner {
         }
     }
 
+    /**
+     * Discovers every {@code .aird} file in the model directory and
+     * runs the Sirius pipeline over each, skipping silently when the
+     * Sirius bundles are absent.
+     *
+     * @param fontInventory shared font inventory
+     * @param svgPostProcessor shared SVG post-processor
+     * @param counts shared counters
+     */
     private void runSiriusPipeline(FontInventory fontInventory,
                                    SvgPostProcessor svgPostProcessor,
                                    ExportCounts counts) {
@@ -76,11 +105,22 @@ final class ExportRunner {
         }
     }
 
+    /**
+     * @return whether the core Sirius bundles are installed on the
+     *         running Papyrus instance
+     */
     private static boolean isSiriusInstalled() {
         return Platform.getBundle("org.eclipse.sirius") != null
                 && Platform.getBundle("org.eclipse.sirius.ui") != null;
     }
 
+    /**
+     * Recursively scans {@code modelDirectory} for {@code .aird} files.
+     *
+     * @param modelDirectory the directory to scan
+     * @param counts counters incremented on scan failure
+     * @return discovered file paths, sorted lexicographically
+     */
     private static List<Path> discoverAirdFiles(Path modelDirectory, ExportCounts counts) {
         try (Stream<Path> walk = Files.walk(modelDirectory)) {
             return walk
@@ -94,12 +134,29 @@ final class ExportRunner {
         }
     }
 
+    /**
+     * Prints a single warning line explaining that Sirius isn't
+     * present on the current Papyrus install.
+     *
+     * @param airdFile the file being skipped
+     */
     private static void warnSiriusMissing(Path airdFile) {
         System.err.println(
                 "WARNING: " + airdFile + " is a Sirius representations container, "
                         + "but the Sirius bundles are not present in this Papyrus install. Skipping.");
     }
 
+    /**
+     * Wraps the Sirius pipeline call so that classpath-shape errors
+     * (e.g. {@link NoClassDefFoundError} for a missing Sirius helper
+     * class) translate into a {@code siriusSkipped} increment rather
+     * than aborting the rest of the run.
+     *
+     * @param exporter the Sirius exporter
+     * @param airdFile the file to render
+     * @param outputDirectory directory to write into
+     * @param counts shared counters
+     */
     private static void exportOneAird(SiriusRepresentationExporter exporter,
                                       Path airdFile,
                                       Path outputDirectory,

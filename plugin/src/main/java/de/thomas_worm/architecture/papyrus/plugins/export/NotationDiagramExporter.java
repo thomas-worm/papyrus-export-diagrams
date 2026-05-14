@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2026 Thomas Worm
+ * SPDX-License-Identifier: MIT
+ */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
 import java.lang.reflect.InvocationTargetException;
@@ -14,7 +18,6 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.util.EcoreUtil;
-import org.eclipse.emf.transaction.TransactionalEditingDomain;
 import org.eclipse.gmf.runtime.notation.Diagram;
 import org.eclipse.papyrus.infra.core.resource.ModelSet;
 
@@ -31,11 +34,31 @@ import org.eclipse.papyrus.infra.core.resource.ModelSet;
  */
 final class NotationDiagramExporter {
 
+    /** Target image format every diagram is rendered as. */
     private final ExportFormat format;
+
+    /** Strategy used to derive each output filename stem. */
     private final FilenameStrategy filenameStrategy;
+
+    /**
+     * Snapshot of locally-available fonts. Passed to
+     * {@link ModelFontRemapper} for FontStyle rewriting.
+     */
     private final FontInventory fontInventory;
+
+    /**
+     * Post-processor applied to every SVG file after the GMF renderer
+     * writes it.
+     */
     private final SvgPostProcessor svgPostProcessor;
 
+    /**
+     * @param format target image format
+     * @param filenameStrategy how to derive filename stems
+     * @param fontInventory locally available font families
+     * @param svgPostProcessor SVG post-processor to apply after each
+     *        successful export
+     */
     NotationDiagramExporter(ExportFormat format,
                             FilenameStrategy filenameStrategy,
                             FontInventory fontInventory,
@@ -48,9 +71,13 @@ final class NotationDiagramExporter {
 
     /**
      * Walks {@code modelDirectory} recursively, finds every
-     * {@code .di} file that has a {@code .notation} sibling, and writes
-     * every diagram into {@code outputDirectory}. Mutates
+     * {@code .di} file that has a {@code .notation} sibling, and
+     * writes every diagram into {@code outputDirectory}. Mutates
      * {@code counts} as it goes.
+     *
+     * @param modelDirectory directory to scan
+     * @param outputDirectory directory to write into (must already exist)
+     * @param counts shared counters updated per diagram
      */
     void exportAll(Path modelDirectory, Path outputDirectory, ExportCounts counts) {
         Optional<CopyToImageInvocation> invocation = CopyToImageInvocation.locate();
@@ -65,6 +92,14 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Recursively scans {@code modelDirectory} for {@code .di} files
+     * with an accompanying {@code .notation} sibling.
+     *
+     * @param modelDirectory the model directory
+     * @param counts counters; incremented on scan failure
+     * @return discovered file paths, sorted lexicographically
+     */
     private List<Path> discoverNotationFiles(Path modelDirectory, ExportCounts counts) {
         try (Stream<Path> walk = Files.walk(modelDirectory)) {
             return walk
@@ -78,12 +113,29 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * @param path any path
+     * @return {@code true} when {@code path} is a {@code .di} file
+     *         and a sibling file with the same base name and a
+     *         {@code .notation} extension exists on disk
+     */
     private static boolean hasNotationSibling(Path path) {
         if (!path.getFileName().toString().endsWith(".di")) return false;
         String base = stripExtension(path.getFileName().toString());
         return Files.exists(path.resolveSibling(base + ".notation"));
     }
 
+    /**
+     * Exports every diagram of a single {@code .di} / {@code .notation}
+     * pair into {@code outputDirectory}.
+     *
+     * @param diFile path to the {@code .di} entry point file
+     * @param outputDirectory where exported images go
+     * @param invocation resolved {@code copyToImage} method
+     * @param filenames shared filename generator (so collision
+     *        de-duplication spans all diagrams in the run)
+     * @param counts shared counters updated per diagram
+     */
     private void exportOne(Path diFile,
                            Path outputDirectory,
                            CopyToImageInvocation invocation,
@@ -106,6 +158,15 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Loads the {@code .di} + companion resources into the supplied
+     * environment and returns the notation resource that holds the
+     * diagrams.
+     *
+     * @param diFile entry point file
+     * @param environment freshly created environment
+     * @return loaded notation resource, or {@code null} on failure
+     */
     private Resource loadNotationModel(Path diFile, PapyrusModelEnvironment environment) {
         ModelSet modelSet = environment.modelSet();
         String base = stripExtension(diFile.getFileName().toString());
@@ -125,6 +186,18 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Prefers Papyrus's {@code ModelSet.loadModels(URI)} which wires
+     * up the {@code .di}/{@code .uml}/{@code .notation} triplet
+     * through registered {@code IModel}s. Falls back to loading the
+     * {@code .uml} and {@code .notation} directly when the API is
+     * absent.
+     *
+     * @param modelSet target model set
+     * @param diFile path to the {@code .di} file
+     * @param base shared base name of the triplet
+     * @throws Exception when the reflective load throws
+     */
     private static void loadWithPapyrusOrManually(ModelSet modelSet, Path diFile, String base)
             throws Exception {
         URI diUri = URI.createFileURI(diFile.toAbsolutePath().toString());
@@ -136,6 +209,14 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Loads the {@code .uml} (if present) and {@code .notation}
+     * resources directly into {@code modelSet}.
+     *
+     * @param modelSet target model set
+     * @param diFile path to the {@code .di} file
+     * @param base shared base name of the triplet
+     */
     private static void loadCompanionResources(ModelSet modelSet, Path diFile, String base) {
         Path umlFile = diFile.resolveSibling(base + ".uml");
         if (Files.exists(umlFile)) {
@@ -145,6 +226,14 @@ final class NotationDiagramExporter {
         modelSet.getResource(URI.createFileURI(notationFile.toAbsolutePath().toString()), true);
     }
 
+    /**
+     * Runs the font remapper inside the environment's editing domain
+     * with errors swallowed — fonts are a render-quality concern, not
+     * a correctness one, and we'd rather export with the wrong font
+     * than skip the diagram entirely.
+     *
+     * @param environment the loaded environment
+     */
     private void remapFontsQuietly(PapyrusModelEnvironment environment) {
         try {
             new ModelFontRemapper(fontInventory)
@@ -155,6 +244,13 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Forces Papyrus's per-diagram CSS engine to drop its cached
+     * stylesheets and element adapters, so the freshly-set theme
+     * takes effect at first paint.
+     *
+     * @param notationResource the loaded notation resource
+     */
     private static void resetCssEngineQuietly(Resource notationResource) {
         try {
             Class<?> cssNotationResource = Class.forName(
@@ -169,12 +265,28 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Invokes the {@code reset} and {@code resetCache} methods on the
+     * CSS engine when present; silent when {@code engine} is
+     * {@code null} or the methods aren't available.
+     *
+     * @param engine an instance of Papyrus's
+     *        {@code ExtendedCSSEngine}, possibly {@code null}
+     */
     private static void resetEngineIfPresent(Object engine) {
         if (engine == null) return;
         try { engine.getClass().getMethod("reset").invoke(engine); } catch (Throwable ignored) { }
         try { engine.getClass().getMethod("resetCache").invoke(engine); } catch (Throwable ignored) { }
     }
 
+    /**
+     * Invokes {@code CSSDiagramImpl.resetCSS()} on every diagram in
+     * the resource that's a {@code CSSDiagramImpl}.
+     *
+     * @param notationResource the loaded notation resource
+     * @throws Exception when reflection itself fails (class loading,
+     *         method resolution)
+     */
     private static void resetCssOnDiagrams(Resource notationResource) throws Exception {
         Class<?> cssDiagramImpl = Class.forName(
                 "org.eclipse.papyrus.infra.gmfdiag.css.notation.CSSDiagramImpl");
@@ -186,6 +298,16 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * Exports every {@link Diagram} from the resource into
+     * {@code outputDirectory}, updating {@code counts} for each.
+     *
+     * @param notationResource the resource holding the diagrams
+     * @param invocation resolved {@code copyToImage} method
+     * @param filenames shared filename generator
+     * @param outputDirectory directory exported files go into
+     * @param counts shared counters
+     */
     private void exportEveryDiagram(Resource notationResource,
                                     CopyToImageInvocation invocation,
                                     DiagramFilenameGenerator filenames,
@@ -209,6 +331,10 @@ final class NotationDiagramExporter {
         }
     }
 
+    /**
+     * @param resource the resource to inspect
+     * @return every top-level {@link Diagram} the resource contains
+     */
     private static Collection<Diagram> collectDiagrams(Resource resource) {
         Collection<Diagram> diagrams = new ArrayList<>();
         for (EObject element : resource.getContents()) {
@@ -217,6 +343,14 @@ final class NotationDiagramExporter {
         return diagrams;
     }
 
+    /**
+     * Unwraps the typical {@link InvocationTargetException} that
+     * reflective calls produce so log lines show the actual underlying
+     * cause.
+     *
+     * @param t the caught throwable
+     * @return either {@code t} unchanged or its causal exception
+     */
     private static Throwable unwrap(Throwable t) {
         if (t instanceof InvocationTargetException ite && ite.getCause() != null) {
             return ite.getCause();
@@ -224,6 +358,12 @@ final class NotationDiagramExporter {
         return t;
     }
 
+    /**
+     * Removes the last {@code .extension} segment from a file name.
+     *
+     * @param filename the raw file name (no path)
+     * @return the base name
+     */
     private static String stripExtension(String filename) {
         int dot = filename.lastIndexOf('.');
         return dot < 0 ? filename : filename.substring(0, dot);

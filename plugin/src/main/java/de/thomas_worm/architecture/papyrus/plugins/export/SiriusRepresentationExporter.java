@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2026 Thomas Worm
+ * SPDX-License-Identifier: MIT
+ */
 package de.thomas_worm.architecture.papyrus.plugins.export;
 
 import java.nio.file.Path;
@@ -36,11 +40,31 @@ import org.eclipse.swt.widgets.Display;
  */
 final class SiriusRepresentationExporter {
 
+    /** Target image format every diagram is rendered as. */
     private final ExportFormat format;
+
+    /** Strategy used to derive each output filename stem. */
     private final FilenameStrategy filenameStrategy;
+
+    /**
+     * Snapshot of locally-available fonts, used by the
+     * {@link ModelFontRemapper} applied to the session resources.
+     */
     private final FontInventory fontInventory;
+
+    /**
+     * Post-processor applied to every SVG file after the GMF renderer
+     * writes it.
+     */
     private final SvgPostProcessor svgPostProcessor;
 
+    /**
+     * @param format target image format
+     * @param filenameStrategy how to derive filename stems
+     * @param fontInventory locally available font families
+     * @param svgPostProcessor SVG post-processor to apply after each
+     *        successful export
+     */
     SiriusRepresentationExporter(ExportFormat format,
                                  FilenameStrategy filenameStrategy,
                                  FontInventory fontInventory,
@@ -54,6 +78,10 @@ final class SiriusRepresentationExporter {
     /**
      * Exports every representation in {@code airdFile} into
      * {@code outputDirectory}, updating {@code counts} as it goes.
+     *
+     * @param airdFile the {@code .aird} file to read
+     * @param outputDirectory directory to write into (must exist)
+     * @param counts shared counters updated per representation
      */
     void exportAll(Path airdFile, Path outputDirectory, ExportCounts counts) {
         Optional<CopyToImageInvocation> invocation = CopyToImageInvocation.locate();
@@ -76,6 +104,14 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Opens (or reuses) the Sirius session backing {@code airdFile}.
+     *
+     * @param airdFile the {@code .aird} file to open
+     * @param monitor progress monitor
+     * @param counts shared counters; incremented on open failure
+     * @return the open session, or {@link Optional#empty()} on failure
+     */
     private static Optional<Session> openSession(Path airdFile,
                                                  IProgressMonitor monitor,
                                                  ExportCounts counts) {
@@ -100,6 +136,15 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Lists every representation descriptor known to the session.
+     *
+     * @param session open Sirius session
+     * @param airdFile path used for log output
+     * @param counts shared counters; incremented on enumeration failure
+     * @return descriptors, or {@code null} on failure (which is also
+     *         tracked in {@code counts})
+     */
     private static Collection<DRepresentationDescriptor> enumerateDescriptors(
             Session session, Path airdFile, ExportCounts counts) {
         try {
@@ -113,6 +158,12 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Runs the font remapper over the session's resources, swallowing
+     * any failure — font remapping is best-effort cosmetic work.
+     *
+     * @param session the open session whose resources are remapped
+     */
     private void remapFontsQuietly(Session session) {
         try {
             new ModelFontRemapper(fontInventory)
@@ -123,6 +174,16 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Iterates every descriptor and renders its backing GMF diagram.
+     *
+     * @param session the open session
+     * @param descriptors enumerated representation descriptors
+     * @param invocation resolved {@code copyToImage} method
+     * @param outputDirectory directory to write into
+     * @param monitor progress monitor passed to Sirius's refresh
+     * @param counts shared counters updated per descriptor
+     */
     private void exportEachDescriptor(Session session,
                                       Collection<DRepresentationDescriptor> descriptors,
                                       CopyToImageInvocation invocation,
@@ -140,6 +201,19 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Renders one descriptor's backing GMF diagram into a file.
+     *
+     * @param descriptor the descriptor to render
+     * @param session the open session
+     * @param diagramByRepresentation cached representation→Diagram map
+     * @param invocation resolved {@code copyToImage} method
+     * @param outputDirectory directory to write into
+     * @param filenames shared filename generator
+     * @param display SWT display used to marshal the call onto the UI thread
+     * @param monitor progress monitor for the refresh call
+     * @param counts shared counters
+     */
     private void exportOneDescriptor(DRepresentationDescriptor descriptor,
                                      Session session,
                                      Map<EObject, Diagram> diagramByRepresentation,
@@ -169,6 +243,13 @@ final class SiriusRepresentationExporter {
         runExportOnUiThread(display, diagram, descriptor, filenames, outputDirectory, invocation, counts);
     }
 
+    /**
+     * Lazily resolves a descriptor's {@code DRepresentation}.
+     *
+     * @param descriptor the descriptor to resolve
+     * @param counts counters; incremented on resolution failure
+     * @return the resolved representation, or {@code null} on failure
+     */
     private static DRepresentation resolveRepresentation(DRepresentationDescriptor descriptor,
                                                          ExportCounts counts) {
         try {
@@ -182,6 +263,21 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Asks Sirius to refresh the representation so the backing GMF
+     * diagram reflects the current semantic model. Failures are
+     * tolerated; we fall back to whatever's already in the
+     * {@code .aird}.
+     *
+     * <p>{@code DialectManager.refresh} mutates the model, so the
+     * call is wrapped in a {@link RecordingCommand} on the session's
+     * editing domain when one is available.
+     *
+     * @param session the open session
+     * @param representation the representation to refresh
+     * @param descriptor descriptor used only for log output
+     * @param monitor progress monitor
+     */
     private static void refreshRepresentationQuietly(Session session,
                                                      DRepresentation representation,
                                                      DRepresentationDescriptor descriptor,
@@ -191,6 +287,12 @@ final class SiriusRepresentationExporter {
             if (editingDomain != null) {
                 editingDomain.getCommandStack().execute(
                         new RecordingCommand(editingDomain, "Refresh representation") {
+                            /**
+                             * Runs Sirius's refresh inside the command's
+                             * write transaction; refresh mutates the
+                             * model and would otherwise trip the
+                             * transactional-resource-set guard.
+                             */
                             @Override
                             protected void doExecute() {
                                 DialectManager.INSTANCE.refresh(representation, monitor);
@@ -206,6 +308,23 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * Runs {@link CopyToImageInvocation#exportDiagram} and the SVG
+     * post-process on the SWT UI thread.
+     *
+     * <p>GMF's render path creates Shells and uses the {@link Display}
+     * directly, so the call must run on whatever thread owns the
+     * display. {@link Display#syncExec} blocks until the render
+     * completes.
+     *
+     * @param display the SWT display to marshal onto
+     * @param diagram the backing GMF diagram to render
+     * @param descriptor descriptor used to derive the file name
+     * @param filenames shared filename generator
+     * @param outputDirectory directory to write into
+     * @param invocation resolved {@code copyToImage} method
+     * @param counts shared counters
+     */
     private void runExportOnUiThread(Display display,
                                      Diagram diagram,
                                      DRepresentationDescriptor descriptor,
@@ -232,6 +351,14 @@ final class SiriusRepresentationExporter {
         });
     }
 
+    /**
+     * Builds a lookup table from each {@code DRepresentation} to its
+     * backing GMF {@code Diagram} by walking every loaded session
+     * resource.
+     *
+     * @param session the open session
+     * @return identity-keyed map of representation→diagram
+     */
     private static Map<EObject, Diagram> collectGmfDiagramsByRepresentation(Session session) {
         Map<EObject, Diagram> diagramByRepresentation = new IdentityHashMap<>();
         for (Resource resource : session.getAllSessionResources()) {
@@ -247,6 +374,13 @@ final class SiriusRepresentationExporter {
         return diagramByRepresentation;
     }
 
+    /**
+     * Walks {@code resource} and indexes every reachable
+     * {@link Diagram} keyed by its semantic element.
+     *
+     * @param resource resource to walk
+     * @param target identity map populated with the findings
+     */
     private static void indexDiagramsByRepresentation(Resource resource,
                                                       Map<EObject, Diagram> target) {
         for (Iterator<EObject> iterator = resource.getAllContents(); iterator.hasNext(); ) {
@@ -260,15 +394,30 @@ final class SiriusRepresentationExporter {
         }
     }
 
+    /**
+     * @return the {@link Display} bound to the current thread when
+     *         present, otherwise the shared default display
+     */
     private static Display currentOrDefaultDisplay() {
         Display current = Display.getCurrent();
         return current != null ? current : Display.getDefault();
     }
 
+    /**
+     * Closes the Sirius session, swallowing failures.
+     *
+     * @param session the session to close
+     * @param monitor progress monitor
+     */
     private static void closeQuietly(Session session, IProgressMonitor monitor) {
         try { session.close(monitor); } catch (Throwable ignored) { }
     }
 
+    /**
+     * @param descriptor a representation descriptor
+     * @return the descriptor's user-facing name, or
+     *         {@code "<unnamed>"} when blank
+     */
     private static String describe(DRepresentationDescriptor descriptor) {
         String name = descriptor.getName();
         return (name == null || name.isBlank()) ? "<unnamed>" : name;
