@@ -1,0 +1,87 @@
+name: "Test: papyrus-export-diagrams"
+
+on:
+  push: {}
+  pull_request: {}
+
+permissions:
+  contents: write
+
+jobs:
+  testExportDiagrams:
+    name: "Test on ${{ matrix.os }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            output-dir: model_images_linux
+          - os: macos-latest
+            output-dir: model_images_macos
+          - os: windows-latest
+            output-dir: model_images_windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Papyrus
+        id: papyrus
+        uses: thomas-worm/setup-papyrus@v1
+
+      - name: Clean previous output
+        shell: bash
+        run: rm -rf "${{ matrix.output-dir }}" && mkdir -p "${{ matrix.output-dir }}"
+
+      - name: Run export action
+        id: export
+        uses: ./
+        with:
+          papyrus-home:     ${{ steps.papyrus.outputs.papyrus-home }}
+          papyrus-launcher: ${{ steps.papyrus.outputs.papyrus-launcher }}
+          model-dir:        model
+          output-dir:       ${{ matrix.output-dir }}
+
+      - name: Show exported images
+        shell: bash
+        run: |
+          echo "Exported diagrams: ${{ steps.export.outputs.exported-count }}"
+          echo "Failed exports:    ${{ steps.export.outputs.failed-count }}"
+          ls -lR "${{ matrix.output-dir }}" || true
+
+      - name: Upload export log on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: papyrus-export-log-${{ matrix.os }}
+          path: ${{ runner.temp }}/papyrus-export.log
+          if-no-files-found: warn
+
+      - name: Commit and push changes
+        # Run on partial export failures too — if anything was rendered,
+        # the user wants those files saved rather than discarded.
+        if: ${{ always() && github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ matrix.output-dir }}"
+          # Each matrix job pushes its own OS-specific directory. Pull
+          # first in case another OS in the matrix pushed before us;
+          # rebasing on top is safe because each job touches a disjoint
+          # set of paths.
+          BRANCH=${GITHUB_REF#refs/heads/}
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: re-export diagrams (${{ matrix.os }}) [skip ci]"
+            # Push with retry against concurrent matrix push contention.
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin "${BRANCH}" || true
+              if git push origin "HEAD:${BRANCH}"; then
+                echo "pushed on attempt ${attempt}"
+                break
+              fi
+              echo "push attempt ${attempt} lost the race; retrying"
+              sleep $((attempt * 3))
+            done
+          fi

@@ -1,0 +1,155 @@
+name: "Test: feature matrix"
+
+# Exercises every combination of the action's `format` and `naming`
+# inputs on every supported runner. The smaller "Test:
+# papyrus-export-diagrams" workflow keeps the canonical (SVG /
+# xmiId) outputs committed to the repo as a regression baseline;
+# this workflow's job is to make sure each remaining combination
+# still produces correct files.
+#
+# Each matrix cell uploads a temporary per-cell artifact named
+# `diagrams__<os>__<format>__<naming>`. The double-underscore
+# delimiter makes the (os, format, naming) tuple unambiguous to
+# parse back out (the OS string itself contains a hyphen). A final
+# aggregation job downloads every per-cell artifact, rearranges
+# them into a `<os>/<format>/<naming>/` directory tree, uploads the
+# combined result as a single artifact named
+# `papyrus-export-diagrams`, and deletes the intermediates so the
+# Actions UI shows only the aggregated download.
+
+on:
+  push: {}
+  pull_request: {}
+
+permissions:
+  contents: read
+  # Required by the aggregation job to delete the intermediate
+  # per-cell artifacts via the GitHub REST API.
+  actions: write
+
+jobs:
+  testFeatureMatrix:
+    name: "${{ matrix.os }} / ${{ matrix.format }} / ${{ matrix.naming }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        format: [SVG, PNG, JPEG, BMP, GIF]
+        naming: [xmiId, name]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Papyrus
+        id: papyrus
+        uses: thomas-worm/setup-papyrus@v1
+
+      - name: Run export action
+        id: export
+        uses: ./
+        with:
+          papyrus-home:     ${{ steps.papyrus.outputs.papyrus-home }}
+          papyrus-launcher: ${{ steps.papyrus.outputs.papyrus-launcher }}
+          model-dir:        model
+          output-dir:       ${{ runner.temp }}/diagrams-out
+          format:           ${{ matrix.format }}
+          naming:           ${{ matrix.naming }}
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          python3 .github/scripts/verify-exports.py \
+            --output-dir "${{ runner.temp }}/diagrams-out" \
+            --format "${{ matrix.format }}" \
+            --naming "${{ matrix.naming }}" \
+            --exported-count "${{ steps.export.outputs.exported-count }}"
+
+      - name: Upload per-cell intermediate artifact
+        # Always upload, even on partial failure, so the aggregation
+        # job and any post-mortem inspection see what the run actually
+        # produced when something broke. The aggregation job deletes
+        # this intermediate after combining everything into a single
+        # download.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: diagrams__${{ matrix.os }}__${{ matrix.format }}__${{ matrix.naming }}
+          path: ${{ runner.temp }}/diagrams-out
+          if-no-files-found: warn
+
+      - name: Upload export log on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: papyrus-export-log-${{ matrix.os }}-${{ matrix.format }}-${{ matrix.naming }}
+          path: ${{ runner.temp }}/papyrus-export.log
+          if-no-files-found: warn
+
+  aggregateArtifacts:
+    name: "Aggregate exports into one artifact"
+    needs: testFeatureMatrix
+    # Run even when some matrix cells failed; the aggregator just
+    # picks up whatever each cell uploaded, so partial failures
+    # still produce a useful combined download.
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download every per-cell intermediate artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: 'diagrams__*'
+          path: ${{ runner.temp }}/cells
+
+      - name: Build the <os>/<format>/<naming>/ tree
+        shell: bash
+        env:
+          CELLS_DIR: ${{ runner.temp }}/cells
+          OUT_DIR:   ${{ runner.temp }}/papyrus-export-diagrams
+        run: |
+          set -euo pipefail
+          mkdir -p "${OUT_DIR}"
+          shopt -s nullglob
+          for cell_dir in "${CELLS_DIR}"/diagrams__*/; do
+            cell_name=$(basename "${cell_dir}")
+            cell_os=$(printf '%s\n'     "${cell_name}" | awk -F'__' '{print $2}')
+            cell_format=$(printf '%s\n' "${cell_name}" | awk -F'__' '{print $3}')
+            cell_naming=$(printf '%s\n' "${cell_name}" | awk -F'__' '{print $4}')
+            target="${OUT_DIR}/${cell_os}/${cell_format}/${cell_naming}"
+            mkdir -p "${target}"
+            cp -R "${cell_dir}"/. "${target}/"
+          done
+          echo "Aggregated layout:"
+          find "${OUT_DIR}" -mindepth 1 -maxdepth 4 -print | sort
+
+      - name: Upload the single aggregated artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: papyrus-export-diagrams
+          path: ${{ runner.temp }}/papyrus-export-diagrams
+          if-no-files-found: error
+
+      - name: Delete per-cell intermediate artifacts
+        # Runs only when the aggregated upload succeeded, so a failed
+        # aggregation never strands the user with no downloadable
+        # output at all. continue-on-error keeps the workflow green
+        # even if individual DELETE calls fail (e.g. forked-PR token
+        # has no actions:write).
+        if: ${{ success() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO:     ${{ github.repository }}
+          RUN_ID:   ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --paginate \
+            --jq '.artifacts[] | select(.name | startswith("diagrams__")) | .id' \
+          | while read -r artifact_id; do
+              [ -n "${artifact_id}" ] || continue
+              echo "Deleting intermediate artifact ${artifact_id}"
+              gh api -X DELETE "repos/${REPO}/actions/artifacts/${artifact_id}" \
+                  >/dev/null 2>&1 || \
+                  echo "  (delete failed for ${artifact_id}; skipping)"
+            done
