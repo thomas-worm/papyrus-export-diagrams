@@ -83,7 +83,13 @@ final class FontFallback {
                     "image-rendering=\"auto\"",
                     "image-rendering=\"optimizeQuality\"");
 
-            // (c) Upscale every embedded raster image to RASTER_UPSCALE×
+            // (c) Apple-private font names (`.AppleSystemUIFont` etc.) only
+            // resolve on macOS. Append Inter (our shipped fallback) and
+            // `sans-serif` to those font-family declarations so viewers
+            // on Linux/Windows still get a faithful render.
+            content = addInterFallbackForAppleFonts(content);
+
+            // (d) Upscale every embedded raster image to RASTER_UPSCALE×
             // its native resolution using bicubic interpolation. The
             // SVG display dimensions (the <image> width/height) stay
             // the same — only the PNG inside the data: URL has more
@@ -91,12 +97,11 @@ final class FontFallback {
             // blocky output.
             content = upscaleEmbeddedPngs(content, RASTER_UPSCALE);
 
-            // (d) When the SVG references the Inter font (our fallback
-            // for macOS's .AppleSystemUIFont), inline the WOFF2 we
+            // (e) When the SVG references the Inter font (directly or
+            // as an Apple-private-font fallback), inline the WOFF2 we
             // ship in the plugin as an @font-face data URL so viewers
             // without Inter installed render the same way.
-            if (content.contains("font-family=\"'Inter'\"")
-                    || dialogReplacement.equals("Inter")) {
+            if (content.contains("'Inter'") || dialogReplacement.equals("Inter")) {
                 content = embedInterFontFace(content);
             }
 
@@ -111,6 +116,28 @@ final class FontFallback {
 
     private static final Pattern FONT_FAMILY = Pattern.compile(
             "font-family=\"'([^']+)'\"");
+
+    private static final Pattern APPLE_PRIVATE_FONT_FAMILY = Pattern.compile(
+            "font-family=\"'(\\.[^']+)'\"");
+
+    private static String addInterFallbackForAppleFonts(String svg) {
+        Matcher m = APPLE_PRIVATE_FONT_FAMILY.matcher(svg);
+        if (!m.find()) return svg;
+        m.reset();
+        StringBuilder out = new StringBuilder(svg.length());
+        int rewrites = 0;
+        while (m.find()) {
+            m.appendReplacement(out, Matcher.quoteReplacement(
+                    "font-family=\"'" + m.group(1) + "', 'Inter', sans-serif\""));
+            rewrites++;
+        }
+        m.appendTail(out);
+        if (rewrites > 0) {
+            System.out.println("SvgPostProcess: appended 'Inter', sans-serif fallback to "
+                    + rewrites + " Apple-private font-family declaration(s)");
+        }
+        return out.toString();
+    }
 
     private static volatile String CACHED_INTER_FONT_FACE;
 
@@ -229,19 +256,34 @@ final class FontFallback {
 
 
     // Search order for replacing an unavailable font. The first family
-    // in this list that the JVM actually has wins. Inter is preferred —
-    // it's the closest freely-redistributable match to macOS's San
-    // Francisco system font, which is what `.AppleSystemUIFont` resolves
-    // to. Arial / Liberation Sans come next as metric-compatible
-    // backups; SansSerif (Java's logical sans-serif) is the final
-    // always-present fallback.
-    private static final List<String> FALLBACK_ORDER = List.of(
+    // in this list that the JVM actually has wins.
+    //
+    // On macOS, `.AppleSystemUIFont` (San Francisco) is the platform's
+    // native UI font and what models authored on macOS expect. Keep it
+    // at the top so labels that fell off the model's explicit FontStyle
+    // re-resolve to the same family, then Inter as a close metric match
+    // for anything where SF can't be loaded directly.
+    //
+    // On Linux/Windows, Inter is the closest freely-redistributable
+    // match for SF, which setup-papyrus installs system-wide. Arial /
+    // Liberation Sans come next as metric-compatible backups; SansSerif
+    // (Java's logical sans-serif) is the final always-present fallback.
+    private static final List<String> FALLBACK_ORDER_MACOS = List.of(
+            ".AppleSystemUIFont",
+            "Inter",
+            "Helvetica",
+            "Arial",
+            "SansSerif");
+    private static final List<String> FALLBACK_ORDER_OTHER = List.of(
             "Inter",
             "Arial",
             "Liberation Sans",
             "DejaVu Sans",
             "Noto Sans",
             "SansSerif");
+    private static List<String> fallbackOrder() {
+        return IS_MACOS ? FALLBACK_ORDER_MACOS : FALLBACK_ORDER_OTHER;
+    }
 
     private final Set<String> available;
     private final String fallback;
@@ -319,7 +361,7 @@ final class FontFallback {
     }
 
     private String chooseFallback() {
-        for (String candidate : FALLBACK_ORDER) {
+        for (String candidate : fallbackOrder()) {
             if (isAvailable(candidate)) return candidate;
         }
         // SansSerif is a Java logical family — always present.
