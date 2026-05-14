@@ -87,27 +87,36 @@ public class ExportApplication implements IApplication {
         // consults wins, the rest are no-ops.
         applyThemePreferences();
 
-        // Diagnostic: dump the plugin.xml of the CSS bundle so we can
-        // see which preference page / store the theme dropdown writes to.
+        // Diagnostic: verify the preference is actually stored and ask
+        // ThemeManager what it thinks is active.
         try {
-            for (String bn : new String[] {
-                    "org.eclipse.papyrus.infra.gmfdiag.css",
-                    "org.eclipse.papyrus.infra.gmfdiag.css.properties",
-                    "org.eclipse.papyrus.infra.gmfdiag.style",
-            }) {
-                org.osgi.framework.Bundle bb = Platform.getBundle(bn);
-                if (bb == null) continue;
-                java.net.URL p = bb.getEntry("plugin.xml");
-                if (p == null) continue;
-                try (java.io.InputStream in = p.openStream()) {
-                    String body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    System.out.println("=== " + bn + " plugin.xml ===");
-                    System.out.println(body);
-                    System.out.println("=== end ===");
+            String got = InstanceScope.INSTANCE
+                    .getNode("org.eclipse.papyrus.infra.gmfdiag.css")
+                    .get("currentTheme", "<unset>");
+            System.out.println("CSS: InstanceScope currentTheme = " + got);
+        } catch (Throwable t) {
+            System.err.println("Reading currentTheme failed: " + t);
+        }
+        try {
+            Class<?> tmClass = Class.forName(
+                    "org.eclipse.papyrus.infra.gmfdiag.css.theme.ThemeManager");
+            Object tm = tmClass.getField("instance").get(null);
+            System.out.println("CSS: ThemeManager.instance = " + tm);
+            for (java.lang.reflect.Method m : tmClass.getMethods()) {
+                if (m.getParameterCount() == 0
+                        && (m.getName().contains("Theme") || m.getName().contains("Style"))) {
+                    try {
+                        Object r = m.invoke(tm);
+                        String s = String.valueOf(r);
+                        if (s.length() > 200) s = s.substring(0, 200) + "…";
+                        System.out.println("  " + m.getName() + "() -> " + s);
+                    } catch (Throwable mt) {
+                        System.out.println("  " + m.getName() + "() threw " + mt);
+                    }
                 }
             }
         } catch (Throwable t) {
-            System.err.println("Plugin.xml dump failed: " + t);
+            System.err.println("ThemeManager probe failed: " + t);
         }
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
