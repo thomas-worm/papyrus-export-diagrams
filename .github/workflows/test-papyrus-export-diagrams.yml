@@ -23,7 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Papyrus
         id: papyrus
@@ -51,7 +51,7 @@ jobs:
 
       - name: Upload export log on failure
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: papyrus-export-log-${{ matrix.os }}
           path: ${{ runner.temp }}/papyrus-export.log
