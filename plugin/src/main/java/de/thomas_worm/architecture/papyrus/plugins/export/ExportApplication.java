@@ -92,6 +92,15 @@ public class ExportApplication implements IApplication {
         for (String b : new String[] {
                 "org.eclipse.papyrus.infra.core",
                 "org.eclipse.papyrus.infra.gmfdiag.common",
+                // CSS engine. Activator typically registers the
+                // CSSNotationResource.Factory with the EMF global
+                // resource-factory registry, which is what gives loaded
+                // notation diagrams a CSS-style adapter and lets the
+                // edit parts paint with the gradient fills configured
+                // by the theme stylesheets.
+                "org.eclipse.papyrus.infra.gmfdiag.css",
+                "org.eclipse.papyrus.uml.diagram.css",
+                "org.eclipse.papyrus.infra.gmfdiag.style",
                 "org.eclipse.gmf.runtime.diagram.ui.render",
                 "org.eclipse.sirius",
                 "org.eclipse.sirius.ui",
@@ -99,8 +108,15 @@ public class ExportApplication implements IApplication {
         }) {
             try {
                 var bundle = Platform.getBundle(b);
-                if (bundle != null) bundle.start();
-            } catch (Throwable ignore) { }
+                if (bundle != null) {
+                    bundle.start();
+                    System.out.println("Activated: " + b);
+                } else {
+                    System.err.println("Bundle not present: " + b);
+                }
+            } catch (Throwable t) {
+                System.err.println("Could not activate " + b + ": " + t);
+            }
         }
 
         // Papyrus's GMF edit parts hard-reference PlatformUI.getWorkbench()

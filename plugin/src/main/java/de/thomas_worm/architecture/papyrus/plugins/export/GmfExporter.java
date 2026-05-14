@@ -170,6 +170,24 @@ final class GmfExporter {
                 System.err.println("GMF: font remap failed (continuing with original fonts): " + t);
             }
 
+            // Diagnostic: log the resource impl class for the loaded
+            // .notation. If Papyrus's CSS bundle is wired in correctly,
+            // it should be a CSSNotationResource (which makes loaded
+            // Diagrams CSS-aware). Otherwise we get a plain
+            // NotationResourceImpl with no CSS-style adapter and the
+            // edit parts paint with the flat colour stored in the
+            // FillStyle instead of the gradient configured in the theme.
+            System.out.println("CSS: notation resource impl is "
+                    + notationRes.getClass().getName());
+            try {
+                for (Diagram d : collectDiagrams(notationRes)) {
+                    System.out.println("CSS:  diagram '"
+                            + (d.getName() == null ? "<unnamed>" : d.getName())
+                            + "' impl=" + d.getClass().getName()
+                            + " adapters=" + d.eAdapters());
+                }
+            } catch (Throwable ignore) { }
+
             Set<String> usedNames = new HashSet<>();
             CopyToImageUtil util = new CopyToImageUtil();
             for (Diagram d : collectDiagrams(notationRes)) {
