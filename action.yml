@@ -124,9 +124,17 @@ runs:
 
         JAR_OUT=$(to_native "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar")
         MANIFEST_NATIVE=$(to_native "${BUILD_DIR}/staging/META-INF/MANIFEST.MF")
-        "${JUSTJ_JAR}" cfm "${JAR_OUT}" "${MANIFEST_NATIVE}" \
-            -C "${STAGING_NATIVE}" de \
-            -C "${STAGING_NATIVE}" plugin.xml
+        # Include the de/ tree (compiled classes), plugin.xml and the
+        # bundled font resources directory in the JAR. The fonts/ dir
+        # holds Inter-Regular.woff2 which the runtime reads via the
+        # classloader and embeds as @font-face into SVG exports.
+        JAR_ARGS=( cfm "${JAR_OUT}" "${MANIFEST_NATIVE}"
+            -C "${STAGING_NATIVE}" de
+            -C "${STAGING_NATIVE}" plugin.xml )
+        if [[ -d "${BUILD_DIR}/staging/fonts" ]]; then
+          JAR_ARGS+=( -C "${STAGING_NATIVE}" fonts )
+        fi
+        "${JUSTJ_JAR}" "${JAR_ARGS[@]}"
 
         # Force Equinox to rescan plugins on next start.
         rm -rf "${PAPYRUS_HOME}/configuration/org.eclipse.osgi" \

@@ -91,6 +91,15 @@ final class FontFallback {
             // blocky output.
             content = upscaleEmbeddedPngs(content, RASTER_UPSCALE);
 
+            // (d) When the SVG references the Inter font (our fallback
+            // for macOS's .AppleSystemUIFont), inline the WOFF2 we
+            // ship in the plugin as an @font-face data URL so viewers
+            // without Inter installed render the same way.
+            if (content.contains("font-family=\"'Inter'\"")
+                    || dialogReplacement.equals("Inter")) {
+                content = embedInterFontFace(content);
+            }
+
             if (!content.equals(original)) {
                 java.nio.file.Files.writeString(svgFile, content);
             }
@@ -102,6 +111,51 @@ final class FontFallback {
 
     private static final Pattern FONT_FAMILY = Pattern.compile(
             "font-family=\"'([^']+)'\"");
+
+    private static volatile String CACHED_INTER_FONT_FACE;
+
+    private static String embedInterFontFace(String svg) {
+        try {
+            String fontFace = CACHED_INTER_FONT_FACE;
+            if (fontFace == null) {
+                try (java.io.InputStream in = FontFallback.class
+                        .getResourceAsStream("/fonts/Inter-Regular.woff2")) {
+                    if (in == null) {
+                        System.err.println("SvgPostProcess: Inter-Regular.woff2 "
+                                + "not on the classpath; viewers without Inter "
+                                + "installed will see fallback fonts");
+                        return svg;
+                    }
+                    byte[] bytes = in.readAllBytes();
+                    String b64 = Base64.getEncoder().encodeToString(bytes);
+                    fontFace = "<defs><style type=\"text/css\">"
+                            + "@font-face{"
+                            + "font-family:'Inter';"
+                            + "font-style:normal;"
+                            + "font-weight:400;"
+                            + "src:url(data:font/woff2;base64," + b64 + ") format('woff2');"
+                            + "}"
+                            + "</style></defs>";
+                    CACHED_INTER_FONT_FACE = fontFace;
+                    System.out.println("SvgPostProcess: embedded Inter Regular ("
+                            + bytes.length + " bytes raw / "
+                            + b64.length() + " bytes base64)");
+                }
+            }
+            // Inject right after the opening <svg ...> tag so the
+            // @font-face is parsed before any text uses it.
+            Matcher m = Pattern.compile("(<svg\\b[^>]*>)", Pattern.DOTALL).matcher(svg);
+            if (m.find()) {
+                StringBuilder out = new StringBuilder(svg.length() + fontFace.length());
+                m.appendReplacement(out, Matcher.quoteReplacement(m.group(1) + fontFace));
+                m.appendTail(out);
+                return out.toString();
+            }
+        } catch (Throwable t) {
+            System.err.println("SvgPostProcess: embedding Inter failed: " + t);
+        }
+        return svg;
+    }
 
     private static String pickDialogReplacement(String svg, String defaultFallback) {
         // Tally explicit font-family declarations, ignoring "Dialog"
@@ -174,12 +228,15 @@ final class FontFallback {
     }
 
 
-    // Search order for replacing an unavailable font. The first family in
-    // this list that the JVM actually has wins. Arial / Liberation Sans
-    // are metric-compatible with each other and roughly with Helvetica
-    // and macOS's system font; if none of those is present we land on
-    // SansSerif (Java's logical sans-serif) which always exists.
+    // Search order for replacing an unavailable font. The first family
+    // in this list that the JVM actually has wins. Inter is preferred —
+    // it's the closest freely-redistributable match to macOS's San
+    // Francisco system font, which is what `.AppleSystemUIFont` resolves
+    // to. Arial / Liberation Sans come next as metric-compatible
+    // backups; SansSerif (Java's logical sans-serif) is the final
+    // always-present fallback.
     private static final List<String> FALLBACK_ORDER = List.of(
+            "Inter",
             "Arial",
             "Liberation Sans",
             "DejaVu Sans",
