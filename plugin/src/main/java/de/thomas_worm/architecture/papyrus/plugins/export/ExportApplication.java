@@ -87,6 +87,27 @@ public class ExportApplication implements IApplication {
         // consults wins, the rest are no-ops.
         applyThemePreferences();
 
+        // Diagnostic: enumerate bundles whose names suggest a CSS theme.
+        // The output guides which theme ID + preference key to flip on.
+        try {
+            org.osgi.framework.Bundle self =
+                    org.osgi.framework.FrameworkUtil.getBundle(ExportApplication.class);
+            org.osgi.framework.BundleContext bc = self == null ? null : self.getBundleContext();
+            if (bc != null) {
+                for (org.osgi.framework.Bundle b : bc.getBundles()) {
+                    String n = b.getSymbolicName();
+                    if (n == null) continue;
+                    boolean papyrus = n.startsWith("org.eclipse.papyrus");
+                    boolean themey  = n.contains("theme") || n.contains(".css") || n.contains(".style");
+                    if (papyrus && themey) {
+                        System.out.println("Papyrus CSS/theme bundle: " + n);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("Bundle scan failed: " + t);
+        }
+
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
         // varies slightly across patch releases and across Desktop vs Classic.
         for (String b : new String[] {
