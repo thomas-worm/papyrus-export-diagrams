@@ -90,6 +90,20 @@ final class FontFallback {
             // on Linux/Windows still get a faithful render.
             content = addInterFallbackForAppleFonts(content);
 
+            // (c2) On non-macOS, force every remaining single-name
+            // font-family declaration to the resolved fallback (usually
+            // Inter). Java AWT writes its platform default font
+            // (Segoe UI on Windows, Liberation Sans on Linux) into
+            // <g> and <svg> attributes whenever a figure didn't bind
+            // a specific Font; <text> children override correctly, but
+            // the leftover parent attributes make the SVG look
+            // platform-specific. Canonicalising to one family keeps
+            // the output identical across runners and harmless on
+            // viewers that respect the per-element font-family.
+            if (!IS_MACOS) {
+                content = forceFamilyTo(content, ff.fallback);
+            }
+
             // (d) Upscale every embedded raster image to RASTER_UPSCALE×
             // its native resolution using bicubic interpolation. The
             // SVG display dimensions (the <image> width/height) stay
@@ -117,6 +131,34 @@ final class FontFallback {
 
     private static final Pattern FONT_FAMILY = Pattern.compile(
             "font-family=\"'([^']+)'\"");
+
+    private static final Pattern SINGLE_FONT_FAMILY = Pattern.compile(
+            "font-family=\"'([^']+)'\"");
+
+    private static String forceFamilyTo(String svg, String target) {
+        Matcher m = SINGLE_FONT_FAMILY.matcher(svg);
+        StringBuilder out = new StringBuilder(svg.length());
+        int rewrites = 0;
+        while (m.find()) {
+            String fam = m.group(1);
+            // Leave alone: already the target, Apple-private (handled
+            // by addInterFallbackForAppleFonts), or "Dialog" (handled
+            // by pickDialogReplacement earlier in this pass).
+            if (fam.equals(target) || fam.startsWith(".") || "Dialog".equals(fam)) {
+                m.appendReplacement(out, Matcher.quoteReplacement(m.group(0)));
+            } else {
+                m.appendReplacement(out, Matcher.quoteReplacement(
+                        "font-family=\"'" + target + "'\""));
+                rewrites++;
+            }
+        }
+        m.appendTail(out);
+        if (rewrites > 0) {
+            System.out.println("SvgPostProcess: canonicalised " + rewrites
+                    + " platform-default font-family declaration(s) to '" + target + "'");
+        }
+        return out.toString();
+    }
 
     private static final Pattern APPLE_PRIVATE_FONT_FAMILY = Pattern.compile(
             "font-family=\"'(\\.[^']+)'\"");
