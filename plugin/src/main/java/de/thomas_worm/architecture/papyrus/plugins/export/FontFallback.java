@@ -38,6 +38,7 @@ import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.transaction.RecordingCommand;
 import org.eclipse.emf.transaction.TransactionalEditingDomain;
 import org.eclipse.gmf.runtime.notation.FontStyle;
+import org.eclipse.gmf.runtime.notation.NotationPackage;
 
 final class FontFallback {
 
@@ -337,9 +338,21 @@ final class FontFallback {
             if (o instanceof FontStyle fs) {
                 String name = fs.getFontName();
                 if (name == null || name.isBlank()) continue;
-                if (isAvailable(name)) continue;
-                fs.setFontName(fallback);
-                rewrites++;
+                boolean explicit = fs.eIsSet(NotationPackage.eINSTANCE.getFontStyle_FontName());
+                // Remap when:
+                //   * the named font isn't installed locally (regardless
+                //     of who set it), OR
+                //   * on non-macOS, the FontStyle wasn't explicitly set
+                //     in the notation file. Implicit FontStyles inherit
+                //     the platform's GMF default (Tahoma / Segoe UI /
+                //     etc.) which doesn't match how the same model looks
+                //     on macOS. Forcing Inter there keeps the visual
+                //     result consistent across runners.
+                boolean implicitOnNonMac = !IS_MACOS && !explicit;
+                if (!isAvailable(name) || (implicitOnNonMac && !fallback.equals(name))) {
+                    fs.setFontName(fallback);
+                    rewrites++;
+                }
             }
         }
     }
