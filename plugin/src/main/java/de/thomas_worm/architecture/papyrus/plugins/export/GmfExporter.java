@@ -118,6 +118,17 @@ final class GmfExporter {
             // the exception, just without the noise.
             registerNoopMultiDiagramEditor(registry);
             registry.startRegistry();
+
+            // Install the CSS notation resource factory on this
+            // ModelSet's local registry BEFORE we load anything. The
+            // global factory override on EMF doesn't get picked up by
+            // ModelSet's local registry, so .notation files would
+            // otherwise load as plain GMFResource and
+            // CSSNotationResource.getEngine(res) returns null —
+            // meaning no CSS engine is attached to the loaded diagram,
+            // and gradients render white→white because the engine
+            // never sees the stylesheet.
+            installCssSupport(modelSet);
         } catch (Throwable t) {
             System.err.println("GMF: failed to start Papyrus services for "
                     + notation + ": " + t);
@@ -173,67 +184,40 @@ final class GmfExporter {
             // Diagnostic: log resource and diagram impl classes.
             System.out.println("CSS: notation resource impl is "
                     + notationRes.getClass().getName());
-            // Initialize CSS theme attribute on every View under each
-            // diagram. CSSThemeInitializer is normally called from
-            // Papyrus's initializeView extension point when a user
-            // drops a new element on a diagram; on a freshly loaded
-            // notation it never fires. Invoking it on each existing
-            // view forces the theme bookkeeping that the CSS engine
-            // consults during paint. Wrapped in a write transaction
-            // since it mutates the notation tree.
+            // Reset the CSS engine attached to each loaded diagram so it
+            // re-parses the active theme stylesheets, and ask each diagram
+            // to drop its cached element adapters. Without this, the
+            // engine instance set up at resource-load time may still hold
+            // a stale stylesheet list.
             try {
-                Class<?> ctClass = Class.forName(
-                        "org.eclipse.papyrus.infra.gmfdiag.css.provider.CSSThemeInitializer");
-                System.out.println("CSS: CSSThemeInitializer methods:");
-                for (java.lang.reflect.Method mm : ctClass.getMethods()) {
-                    if (mm.getDeclaringClass() == ctClass
-                            || mm.getName().contains("init")
-                            || mm.getName().contains("ssue")) {
-                        System.out.println("  " + mm);
+                Class<?> cnrClass = Class.forName(
+                        "org.eclipse.papyrus.infra.gmfdiag.css.resource.CSSNotationResource");
+                java.lang.reflect.Method isCssEnabled =
+                        cnrClass.getMethod("isCSSEnabled",
+                                org.eclipse.emf.ecore.resource.Resource.class);
+                java.lang.reflect.Method getEngine =
+                        cnrClass.getMethod("getEngine",
+                                org.eclipse.emf.ecore.resource.Resource.class);
+                boolean cssOn = (Boolean) isCssEnabled.invoke(null, notationRes);
+                Object engine = getEngine.invoke(null, notationRes);
+                System.out.println("CSS: notation resource impl is "
+                        + notationRes.getClass().getName()
+                        + ", CSSEnabled=" + cssOn
+                        + ", engine=" + engine);
+                if (engine != null) {
+                    try { engine.getClass().getMethod("reset").invoke(engine); } catch (Throwable ignore) { }
+                    try { engine.getClass().getMethod("resetCache").invoke(engine); } catch (Throwable ignore) { }
+                }
+                try {
+                    Class<?> diagImpl = Class.forName(
+                            "org.eclipse.papyrus.infra.gmfdiag.css.notation.CSSDiagramImpl");
+                    java.lang.reflect.Method resetCss = diagImpl.getMethod("resetCSS");
+                    for (Diagram d : collectDiagrams(notationRes)) {
+                        if (diagImpl.isInstance(d)) resetCss.invoke(d);
                     }
-                }
-                System.out.println("CSS: implements interfaces:");
-                for (Class<?> ii : ctClass.getInterfaces()) {
-                    System.out.println("  " + ii.getName());
-                }
-                Object init = ctClass.getDeclaredConstructor().newInstance();
-                java.lang.reflect.Method m = null;
-                for (java.lang.reflect.Method mm : ctClass.getMethods()) {
-                    if (mm.getName().equals("initializeView") && mm.getParameterCount() == 1) {
-                        m = mm; break;
-                    }
-                }
-                if (m != null) {
-                    final java.lang.reflect.Method initMethod = m;
-                    final Object initObj = init;
-                    final int[] touched = { 0 };
-                    editingDomain.getCommandStack().execute(
-                            new org.eclipse.emf.transaction.RecordingCommand(editingDomain, "CSS theme init") {
-                                @Override
-                                protected void doExecute() {
-                                    try {
-                                        for (Diagram d : collectDiagrams(notationRes)) {
-                                            initMethod.invoke(initObj, d);
-                                            touched[0]++;
-                                            for (java.util.Iterator<EObject> it = d.eAllContents(); it.hasNext(); ) {
-                                                EObject o = it.next();
-                                                if (o instanceof org.eclipse.gmf.runtime.notation.View v) {
-                                                    initMethod.invoke(initObj, v);
-                                                    touched[0]++;
-                                                }
-                                            }
-                                        }
-                                    } catch (Throwable t) {
-                                        System.err.println("CSS: initializeView body failed: " + t);
-                                    }
-                                }
-                            });
-                    System.out.println("CSS: ran CSSThemeInitializer.initializeView on " + touched[0] + " views");
-                } else {
-                    System.err.println("CSS: CSSThemeInitializer.initializeView not found");
-                }
+                } catch (Throwable ignore) { }
             } catch (Throwable t) {
-                System.err.println("CSS: theme initializer failed: " + t);
+                System.err.println("CSS: engine reset failed: " + t);
             }
 
             Set<String> usedNames = new HashSet<>();
@@ -276,6 +260,36 @@ final class GmfExporter {
     }
 
     // ---- helpers ----
+
+    private static void installCssSupport(ModelSet modelSet) {
+        try {
+            Class<?> helper = Class.forName(
+                    "org.eclipse.papyrus.infra.gmfdiag.css.helper.CSSHelper");
+            // Some Papyrus builds expose it as ResourceSet, some as
+            // ModelSet — try the more general signature first.
+            java.lang.reflect.Method install = null;
+            for (java.lang.reflect.Method m : helper.getMethods()) {
+                if (!"installCSSSupport".equals(m.getName())) continue;
+                if (m.getParameterCount() == 1) {
+                    install = m;
+                    if (m.getParameterTypes()[0].isAssignableFrom(modelSet.getClass())) {
+                        break;
+                    }
+                }
+            }
+            if (install == null) {
+                System.err.println("CSS: CSSHelper.installCSSSupport not found");
+                return;
+            }
+            install.invoke(null, modelSet);
+            System.out.println("CSS: installed CSS support on ModelSet via " + install);
+        } catch (ClassNotFoundException e) {
+            // CSS bundle not on classpath — fine; we just won't get gradients.
+            System.err.println("CSS: helper bundle not present, gradients disabled");
+        } catch (Throwable t) {
+            System.err.println("CSS: installCSSSupport failed: " + t);
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private static void registerNoopMultiDiagramEditor(ServicesRegistry registry) {
