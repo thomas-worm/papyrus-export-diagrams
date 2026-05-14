@@ -1,0 +1,75 @@
+name: "Test: feature matrix"
+
+# Exercises every combination of the action's `format` and `naming`
+# inputs on every supported runner. The smaller "Test:
+# papyrus-export-diagrams" workflow keeps the canonical (SVG /
+# xmiId) outputs committed to the repo as a regression baseline;
+# this workflow's job is to make sure each remaining combination
+# still produces correct files. Outputs land as downloadable build
+# artifacts (one ZIP per matrix cell) and are not committed back to
+# the repo.
+
+on:
+  push: {}
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  testFeatureMatrix:
+    name: "${{ matrix.os }} / ${{ matrix.format }} / ${{ matrix.naming }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        format: [SVG, PNG, JPEG, BMP, GIF, PDF]
+        naming: [xmiId, name]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Papyrus
+        id: papyrus
+        uses: thomas-worm/setup-papyrus@v1
+
+      - name: Run export action
+        id: export
+        uses: ./
+        with:
+          papyrus-home:     ${{ steps.papyrus.outputs.papyrus-home }}
+          papyrus-launcher: ${{ steps.papyrus.outputs.papyrus-launcher }}
+          model-dir:        model
+          output-dir:       ${{ runner.temp }}/diagrams-out
+          format:           ${{ matrix.format }}
+          naming:           ${{ matrix.naming }}
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          python3 .github/scripts/verify-exports.py \
+            --output-dir "${{ runner.temp }}/diagrams-out" \
+            --format "${{ matrix.format }}" \
+            --naming "${{ matrix.naming }}" \
+            --exported-count "${{ steps.export.outputs.exported-count }}"
+
+      - name: Upload exported diagrams as build artifact
+        # Always upload, even on partial failure, so the artifact lets
+        # us inspect what the run actually produced when something
+        # broke. Each matrix cell uploads a uniquely-named artifact;
+        # GitHub bundles each one into its own downloadable ZIP.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: diagrams-${{ matrix.os }}-${{ matrix.format }}-${{ matrix.naming }}
+          path: ${{ runner.temp }}/diagrams-out
+          if-no-files-found: warn
+
+      - name: Upload export log on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: papyrus-export-log-${{ matrix.os }}-${{ matrix.format }}-${{ matrix.naming }}
+          path: ${{ runner.temp }}/papyrus-export.log
+          if-no-files-found: warn
