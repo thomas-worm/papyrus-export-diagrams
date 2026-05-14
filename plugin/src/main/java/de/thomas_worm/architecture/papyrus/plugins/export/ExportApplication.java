@@ -97,23 +97,18 @@ public class ExportApplication implements IApplication {
         } catch (Throwable t) {
             System.err.println("Reading currentTheme failed: " + t);
         }
+        // Re-apply theme preferences AFTER bundle activations: the CSS
+        // bundle's ThemePreferenceInitializer can re-set "currentTheme"
+        // during activation, overwriting our earlier value with its
+        // initializer default. Doing it again here makes sure our
+        // chosen theme survives.
+        applyThemePreferences();
         try {
-            org.osgi.framework.Bundle themeBundle =
-                    Platform.getBundle("org.eclipse.papyrus.infra.gmfdiag.css.theme");
-            if (themeBundle != null) {
-                java.net.URL css = themeBundle.getEntry("theme/papyrus_theme.css");
-                if (css != null) {
-                    try (java.io.InputStream in = css.openStream()) {
-                        String body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                        System.out.println("=== papyrus_theme.css (first 3000 chars) ===");
-                        System.out.println(body.length() > 3000 ? body.substring(0, 3000) + "\n…" : body);
-                        System.out.println("=== end ===");
-                    }
-                }
-            }
-        } catch (Throwable t) {
-            System.err.println("Theme CSS dump failed: " + t);
-        }
+            String got = InstanceScope.INSTANCE
+                    .getNode("org.eclipse.papyrus.infra.gmfdiag.css")
+                    .get("currentTheme", "<unset>");
+            System.out.println("CSS (post-activate): currentTheme = " + got);
+        } catch (Throwable ignore) { }
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
         // varies slightly across patch releases and across Desktop vs Classic.

@@ -170,23 +170,59 @@ final class GmfExporter {
                 System.err.println("GMF: font remap failed (continuing with original fonts): " + t);
             }
 
-            // Diagnostic: log the resource impl class for the loaded
-            // .notation. If Papyrus's CSS bundle is wired in correctly,
-            // it should be a CSSNotationResource (which makes loaded
-            // Diagrams CSS-aware). Otherwise we get a plain
-            // NotationResourceImpl with no CSS-style adapter and the
-            // edit parts paint with the flat colour stored in the
-            // FillStyle instead of the gradient configured in the theme.
+            // Diagnostic: log resource and diagram impl classes.
             System.out.println("CSS: notation resource impl is "
                     + notationRes.getClass().getName());
+            // Initialize CSS theme attribute on every View under each
+            // diagram. CSSThemeInitializer is normally called from
+            // Papyrus's initializeView extension point when a user
+            // drops a new element on a diagram; on a freshly loaded
+            // notation it never fires. Invoking it on each existing
+            // view forces the theme bookkeeping that the CSS engine
+            // consults during paint. Wrapped in a write transaction
+            // since it mutates the notation tree.
             try {
-                for (Diagram d : collectDiagrams(notationRes)) {
-                    System.out.println("CSS:  diagram '"
-                            + (d.getName() == null ? "<unnamed>" : d.getName())
-                            + "' impl=" + d.getClass().getName()
-                            + " adapters=" + d.eAdapters());
+                Class<?> ctClass = Class.forName(
+                        "org.eclipse.papyrus.infra.gmfdiag.css.provider.CSSThemeInitializer");
+                Object init = ctClass.getDeclaredConstructor().newInstance();
+                java.lang.reflect.Method m = null;
+                for (java.lang.reflect.Method mm : ctClass.getMethods()) {
+                    if (mm.getName().equals("initializeView") && mm.getParameterCount() == 1) {
+                        m = mm; break;
+                    }
                 }
-            } catch (Throwable ignore) { }
+                if (m != null) {
+                    final java.lang.reflect.Method initMethod = m;
+                    final Object initObj = init;
+                    final int[] touched = { 0 };
+                    editingDomain.getCommandStack().execute(
+                            new org.eclipse.emf.transaction.RecordingCommand(editingDomain, "CSS theme init") {
+                                @Override
+                                protected void doExecute() {
+                                    try {
+                                        for (Diagram d : collectDiagrams(notationRes)) {
+                                            initMethod.invoke(initObj, d);
+                                            touched[0]++;
+                                            for (java.util.Iterator<EObject> it = d.eAllContents(); it.hasNext(); ) {
+                                                EObject o = it.next();
+                                                if (o instanceof org.eclipse.gmf.runtime.notation.View v) {
+                                                    initMethod.invoke(initObj, v);
+                                                    touched[0]++;
+                                                }
+                                            }
+                                        }
+                                    } catch (Throwable t) {
+                                        System.err.println("CSS: initializeView body failed: " + t);
+                                    }
+                                }
+                            });
+                    System.out.println("CSS: ran CSSThemeInitializer.initializeView on " + touched[0] + " views");
+                } else {
+                    System.err.println("CSS: CSSThemeInitializer.initializeView not found");
+                }
+            } catch (Throwable t) {
+                System.err.println("CSS: theme initializer failed: " + t);
+            }
 
             Set<String> usedNames = new HashSet<>();
             CopyToImageUtil util = new CopyToImageUtil();
