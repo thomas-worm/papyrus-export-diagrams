@@ -87,25 +87,28 @@ public class ExportApplication implements IApplication {
         // consults wins, the rest are no-ops.
         applyThemePreferences();
 
-        // Diagnostic: enumerate bundles whose names suggest a CSS theme.
-        // The output guides which theme ID + preference key to flip on.
+        // Diagnostic: dump the plugin.xml of the theme bundle to find
+        // the actual theme IDs we should write into the preferences.
         try {
-            org.osgi.framework.Bundle self =
-                    org.osgi.framework.FrameworkUtil.getBundle(ExportApplication.class);
-            org.osgi.framework.BundleContext bc = self == null ? null : self.getBundleContext();
-            if (bc != null) {
-                for (org.osgi.framework.Bundle b : bc.getBundles()) {
-                    String n = b.getSymbolicName();
-                    if (n == null) continue;
-                    boolean papyrus = n.startsWith("org.eclipse.papyrus");
-                    boolean themey  = n.contains("theme") || n.contains(".css") || n.contains(".style");
-                    if (papyrus && themey) {
-                        System.out.println("Papyrus CSS/theme bundle: " + n);
+            org.osgi.framework.Bundle themeBundle =
+                    Platform.getBundle("org.eclipse.papyrus.infra.gmfdiag.css.theme");
+            if (themeBundle != null) {
+                java.net.URL p = themeBundle.getEntry("plugin.xml");
+                if (p != null) {
+                    try (java.io.InputStream in = p.openStream()) {
+                        String body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        System.out.println("=== theme bundle plugin.xml ===");
+                        System.out.println(body);
+                        System.out.println("=== end ===");
                     }
+                }
+                java.util.Enumeration<java.net.URL> css = themeBundle.findEntries("/", "*.css", true);
+                while (css != null && css.hasMoreElements()) {
+                    System.out.println("CSS file: " + css.nextElement());
                 }
             }
         } catch (Throwable t) {
-            System.err.println("Bundle scan failed: " + t);
+            System.err.println("Theme dump failed: " + t);
         }
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
