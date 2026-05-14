@@ -98,25 +98,21 @@ public class ExportApplication implements IApplication {
             System.err.println("Reading currentTheme failed: " + t);
         }
         try {
-            Class<?> tmClass = Class.forName(
-                    "org.eclipse.papyrus.infra.gmfdiag.css.theme.ThemeManager");
-            Object tm = tmClass.getField("instance").get(null);
-            System.out.println("CSS: ThemeManager.instance = " + tm);
-            for (java.lang.reflect.Method m : tmClass.getMethods()) {
-                if (m.getParameterCount() == 0
-                        && (m.getName().contains("Theme") || m.getName().contains("Style"))) {
-                    try {
-                        Object r = m.invoke(tm);
-                        String s = String.valueOf(r);
-                        if (s.length() > 200) s = s.substring(0, 200) + "…";
-                        System.out.println("  " + m.getName() + "() -> " + s);
-                    } catch (Throwable mt) {
-                        System.out.println("  " + m.getName() + "() threw " + mt);
+            org.osgi.framework.Bundle themeBundle =
+                    Platform.getBundle("org.eclipse.papyrus.infra.gmfdiag.css.theme");
+            if (themeBundle != null) {
+                java.net.URL css = themeBundle.getEntry("theme/papyrus_theme.css");
+                if (css != null) {
+                    try (java.io.InputStream in = css.openStream()) {
+                        String body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        System.out.println("=== papyrus_theme.css (first 3000 chars) ===");
+                        System.out.println(body.length() > 3000 ? body.substring(0, 3000) + "\n…" : body);
+                        System.out.println("=== end ===");
                     }
                 }
             }
         } catch (Throwable t) {
-            System.err.println("ThemeManager probe failed: " + t);
+            System.err.println("Theme CSS dump failed: " + t);
         }
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
