@@ -27,9 +27,7 @@ jobs:
 
       - name: Set up Papyrus
         id: papyrus
-        # While developing the multi-OS support, pin to main on
-        # setup-papyrus. Switch to @v1 once that tag is moved.
-        uses: thomas-worm/setup-papyrus@main
+        uses: thomas-worm/setup-papyrus@v1
 
       - name: Clean previous output
         shell: bash
