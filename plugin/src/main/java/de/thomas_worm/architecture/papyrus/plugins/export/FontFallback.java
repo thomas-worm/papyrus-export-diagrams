@@ -168,7 +168,7 @@ final class FontFallback {
         m.appendTail(out);
         if (upscaled > 0) {
             System.out.println("SvgPostProcess: upscaled " + upscaled
-                    + " embedded raster image(s) " + factor + "×");
+                    + " embedded raster image(s) " + factor + "x");
         }
         return out.toString();
     }
