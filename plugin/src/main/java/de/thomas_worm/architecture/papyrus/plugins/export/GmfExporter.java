@@ -117,6 +117,7 @@ final class GmfExporter {
             // null/default values it would have used after catching
             // the exception, just without the noise.
             registerNoopMultiDiagramEditor(registry);
+            registerNoopLabelProviderService(registry);
             registry.startRegistry();
 
             // Install the CSS notation resource factory on this
@@ -288,6 +289,51 @@ final class GmfExporter {
             System.err.println("CSS: helper bundle not present, gradients disabled");
         } catch (Throwable t) {
             System.err.println("CSS: installCSSSupport failed: " + t);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void registerNoopLabelProviderService(ServicesRegistry registry) {
+        try {
+            Class<?> lpsClass = Class.forName(
+                    "org.eclipse.papyrus.infra.services.labelprovider.service.LabelProviderService");
+            Class<?> ilpClass = Class.forName("org.eclipse.jface.viewers.ILabelProvider");
+            // Stub label provider — returns null for icons, the element's
+            // toString for text. Papyrus's getIcon fallback dereferences a
+            // null labelProvider when the service is missing; supplying a
+            // non-null stub makes that NPE go away and the diagram paints
+            // without per-element icons (the icons would otherwise need
+            // the workbench's icon registry, which we don't have).
+            Object ilpStub = Proxy.newProxyInstance(
+                    ilpClass.getClassLoader(),
+                    new Class<?>[] { ilpClass },
+                    (proxy, method, args) -> {
+                        if ("getText".equals(method.getName()) && args != null && args.length == 1) {
+                            return args[0] == null ? "" : String.valueOf(args[0]);
+                        }
+                        Class<?> rt = method.getReturnType();
+                        if (rt == boolean.class) return false;
+                        if (rt.isPrimitive()) return 0;
+                        return null;
+                    });
+            Object lpsStub = Proxy.newProxyInstance(
+                    lpsClass.getClassLoader(),
+                    new Class<?>[] { lpsClass },
+                    (proxy, method, args) -> {
+                        if (method.getName().startsWith("getLabelProvider")
+                                && ilpClass.isAssignableFrom(method.getReturnType())) {
+                            return ilpStub;
+                        }
+                        Class<?> rt = method.getReturnType();
+                        if (rt == boolean.class) return false;
+                        if (rt.isPrimitive()) return 0;
+                        return null;
+                    });
+            registry.add((Class<Object>) lpsClass, 1, lpsStub);
+        } catch (ClassNotFoundException e) {
+            // LabelProviderService bundle isn't present — fine.
+        } catch (Throwable t) {
+            System.err.println("Could not register no-op LabelProviderService: " + t);
         }
     }
 
