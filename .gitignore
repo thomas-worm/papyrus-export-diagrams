@@ -1,0 +1,61 @@
+# --- Build outputs --------------------------------------------------------
+# The plugin is compiled at runtime by the action into the Papyrus install,
+# so the repo itself never contains compiled artefacts. Anything below is
+# the result of a local build that should never be committed.
+*.class
+target/
+build/
+out/
+bin/
+
+# --- IDE: Eclipse / Papyrus ------------------------------------------------
+# The model/.project file is the Papyrus model descriptor and must stay
+# tracked. All other Eclipse IDE descriptors are user-local.
+.classpath
+.settings/
+.project
+!model/.project
+
+# --- IDE: IntelliJ IDEA ---------------------------------------------------
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# --- IDE: Visual Studio Code ----------------------------------------------
+.vscode/
+
+# --- IDE: NetBeans --------------------------------------------------------
+nbproject/private/
+
+# --- OS: macOS ------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- OS: Windows ----------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# --- Backup / temp files --------------------------------------------------
+*~
+*.bak
+*.tmp
+*.swp
+*.orig
+*.rej
+
+# --- Logs -----------------------------------------------------------------
+# The action writes papyrus-export.log into RUNNER_TEMP, but anyone
+# running the launcher locally may end up with one in the repo root.
+*.log
+
+# --- Local environment overrides ------------------------------------------
+.env
+.envrc
+
+# --- AI / agent local state -----------------------------------------------
+.claude/
+.cursor/
+.aider*

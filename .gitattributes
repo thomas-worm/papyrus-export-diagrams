@@ -1,0 +1,65 @@
+# Default: detect text vs binary automatically, normalise EOL to LF on
+# checkin so contributors on Windows don't accidentally introduce CRLF.
+* text=auto eol=lf
+
+# --- Java / Eclipse plugin sources ----------------------------------------
+*.java text eol=lf
+*.properties text eol=lf
+*.xml text eol=lf
+*.MF text eol=lf
+plugin.xml text eol=lf
+MANIFEST.MF text eol=lf
+
+# --- GitHub Actions / shell -----------------------------------------------
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# --- Docs -----------------------------------------------------------------
+*.md text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
+
+# --- Papyrus / EMF model files (all XML) ----------------------------------
+*.di text eol=lf
+*.uml text eol=lf
+*.notation text eol=lf
+*.aird text eol=lf
+*.ecore text eol=lf
+*.genmodel text eol=lf
+*.project text eol=lf
+
+# --- Rendered SVG outputs -------------------------------------------------
+# Treated as text so diffs are reviewable, but viewers in the GitHub UI
+# render them as images when "Rich diff" is on.
+*.svg text eol=lf
+
+# --- Binary assets --------------------------------------------------------
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.ico binary
+*.pdf binary
+*.jar binary
+*.class binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.tgz binary
+*.dmg binary
+
+# --- Language statistics / linguist ---------------------------------------
+# Tell GitHub's language detector that the rendered images and the WOFF2
+# font are vendored data, not authored sources — keeps the repo's
+# language stats focused on the Java plugin and the YAML action.
+model_images_linux/** linguist-generated=true
+model_images_macos/** linguist-generated=true
+model_images_windows/** linguist-generated=true
+plugin/src/main/resources/fonts/** linguist-vendored=true
