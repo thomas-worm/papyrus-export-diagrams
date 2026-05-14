@@ -63,6 +63,19 @@ runs:
         BUILD_DIR:    ${{ steps.paths.outputs.build-dir }}
       run: |
         set -euxo pipefail
+
+        # On Windows runners we shell out via Git Bash; `find` emits
+        # Unix-style paths (/d/a/...) which native Windows javac.exe
+        # cannot resolve. Convert anything we hand to native tools to
+        # Windows-style with cygpath -w. Linux/macOS pass through.
+        to_native() {
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            cygpath -w "$1"
+          else
+            printf '%s' "$1"
+          fi
+        }
+
         # Always rebuild — the Papyrus install is reused across runs from the
         # tool cache, so any previous bundle would otherwise mask new source.
         rm -f "${PAPYRUS_HOME}/plugins"/de.thomas_worm.architecture.papyrus.plugins.export_*.jar
@@ -93,15 +106,27 @@ runs:
         echo "Using javac: ${JUSTJ_JAVAC}"
         echo "Using jar:   ${JUSTJ_JAR}"
 
-        find "${PLUGIN_SRC}/src/main/java" -name '*.java' > "${BUILD_DIR}/sources.txt"
-        "${JUSTJ_JAVAC}" --release 21 -proc:none -d "${BUILD_DIR}/staging" \
-            -cp "${PAPYRUS_HOME}/plugins/*" \
-            @"${BUILD_DIR}/sources.txt"
+        # Source list — native paths so javac@file works on Windows too.
+        : > "${BUILD_DIR}/sources.txt"
+        while IFS= read -r f; do
+          to_native "$f" >> "${BUILD_DIR}/sources.txt"
+          printf '\n' >> "${BUILD_DIR}/sources.txt"
+        done < <(find "${PLUGIN_SRC}/src/main/java" -name '*.java')
 
-        "${JUSTJ_JAR}" cfm "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar" \
-            "${BUILD_DIR}/staging/META-INF/MANIFEST.MF" \
-            -C "${BUILD_DIR}/staging" de \
-            -C "${BUILD_DIR}/staging" plugin.xml
+        STAGING_NATIVE=$(to_native "${BUILD_DIR}/staging")
+        CLASSPATH_NATIVE="$(to_native "${PAPYRUS_HOME}/plugins")"
+        # Java accepts forward slashes on Windows; the wildcard syntax is
+        # the same on every JDK. We only need the path itself to be
+        # interpretable as a Windows path.
+        "${JUSTJ_JAVAC}" --release 21 -proc:none -d "${STAGING_NATIVE}" \
+            -cp "${CLASSPATH_NATIVE}/*" \
+            @"$(to_native "${BUILD_DIR}/sources.txt")"
+
+        JAR_OUT=$(to_native "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar")
+        MANIFEST_NATIVE=$(to_native "${BUILD_DIR}/staging/META-INF/MANIFEST.MF")
+        "${JUSTJ_JAR}" cfm "${JAR_OUT}" "${MANIFEST_NATIVE}" \
+            -C "${STAGING_NATIVE}" de \
+            -C "${STAGING_NATIVE}" plugin.xml
 
         # Force Equinox to rescan plugins on next start.
         rm -rf "${PAPYRUS_HOME}/configuration/org.eclipse.osgi" \
@@ -121,6 +146,17 @@ runs:
       run: |
         set -uo pipefail
         mkdir -p "${OUT_DIR}"
+
+        # Resolve to absolute paths so the launcher doesn't reinterpret
+        # them relative to its own CWD (macOS in particular).
+        MODEL_DIR_ABS=$(cd "${MODEL_DIR}" && pwd)
+        OUT_DIR_ABS=$(cd "${OUT_DIR}" && pwd)
+        if [[ "${RUNNER_OS}" == "Windows" ]]; then
+          MODEL_DIR_ABS=$(cygpath -w "${MODEL_DIR_ABS}")
+          OUT_DIR_ABS=$(cygpath -w "${OUT_DIR_ABS}")
+        fi
+        echo "Model dir:  ${MODEL_DIR_ABS}"
+        echo "Output dir: ${OUT_DIR_ABS}"
 
         # ---- 1. Locate the launcher ------------------------------------
         LAUNCHER="${PAPYRUS_LAUNCHER}"
@@ -176,11 +212,16 @@ runs:
         # Redirect to file directly (no pipe to tee) so $! is the actual
         # launcher PID, which the watchdog needs in order to kill it.
         # A separate `tail -F` streams the log to stdout for log visibility.
+        WORKSPACE_ARG="${WORKSPACE_DIR}"
+        if [[ "${RUNNER_OS}" == "Windows" ]]; then
+          WORKSPACE_ARG=$(cygpath -w "${WORKSPACE_DIR}")
+        fi
+
         "${LAUNCHER}" -nosplash -consoleLog \
             -application de.thomas_worm.architecture.papyrus.plugins.export.app \
-            -data "${WORKSPACE_DIR}" \
-            --modelDir "${MODEL_DIR}" \
-            --outDir "${OUT_DIR}" \
+            -data "${WORKSPACE_ARG}" \
+            --modelDir "${MODEL_DIR_ABS}" \
+            --outDir "${OUT_DIR_ABS}" \
             --format "${EXPORT_FORMAT}" \
             --naming "${NAMING_MODE}" \
             -vmargs -Djava.awt.headless=false \
