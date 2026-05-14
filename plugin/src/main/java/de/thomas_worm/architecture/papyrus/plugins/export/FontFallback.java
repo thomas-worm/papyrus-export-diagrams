@@ -302,9 +302,19 @@ final class FontFallback {
         }
     }
 
+    private static final boolean IS_MACOS =
+            System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+
     private boolean isAvailable(String family) {
+        // Apple's dot-prefixed system font names (".AppleSystemUIFont",
+        // ".SFCompactDisplay-Regular", …) are macOS-private. Java on
+        // Windows sometimes reports these as "available" via alias
+        // entries in unrelated installed fonts, but the actual paint
+        // falls back to a different family (typically Segoe UI). Force
+        // remap on non-macOS so the substitution and the @font-face
+        // embedding actually fire.
+        if (!IS_MACOS && family.startsWith(".")) return false;
         if (available.contains(family)) return true;
-        // case-insensitive match
         return available.contains(family.toLowerCase(Locale.ROOT));
     }
 
