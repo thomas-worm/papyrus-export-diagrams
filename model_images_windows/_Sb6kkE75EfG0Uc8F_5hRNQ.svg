@@ -29,12 +29,12 @@
                 <path d="M9 9 L111 9 L111 114 L9 114 L9 9 Z"/>
             </clipPath>
         </defs>
-        <g fill="url(#linearGradient1)" stroke-miterlimit="0" stroke-width="0" font-family="'Segoe UI'" stroke="url(#linearGradient1)" stroke-linejoin="round">
+        <g fill="url(#linearGradient1)" stroke-miterlimit="0" stroke-width="0" font-family="'Inter'" stroke="url(#linearGradient1)" stroke-linejoin="round">
             <rect x="10" width="100" height="103" y="10" clip-path="url(#clipPath1)" stroke="none"/>
             <text x="37" y="25" clip-path="url(#clipPath2)" fill="black" font-family="'Inter'" stroke="none" xml:space="preserve">«Utility»</text>
             <text x="23" y="41" clip-path="url(#clipPath3)" fill="black" font-family="'Inter'" stroke="none" xml:space="preserve">SampleClass</text>
         </g>
-        <g stroke-linecap="butt" font-family="'Segoe UI'" stroke-width="1.1">
+        <g stroke-linecap="butt" font-family="'Inter'" stroke-width="1.1">
             <line y2="45" fill="none" x1="10" clip-path="url(#clipPath4)" x2="110" y1="45"/>
             <line y2="68" fill="none" x1="10" clip-path="url(#clipPath5)" x2="110" y1="68"/>
             <line y2="91" fill="none" x1="10" clip-path="url(#clipPath6)" x2="110" y1="91"/>
