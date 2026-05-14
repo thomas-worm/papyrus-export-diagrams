@@ -87,28 +87,27 @@ public class ExportApplication implements IApplication {
         // consults wins, the rest are no-ops.
         applyThemePreferences();
 
-        // Diagnostic: dump the plugin.xml of the theme bundle to find
-        // the actual theme IDs we should write into the preferences.
+        // Diagnostic: dump the plugin.xml of the CSS bundle so we can
+        // see which preference page / store the theme dropdown writes to.
         try {
-            org.osgi.framework.Bundle themeBundle =
-                    Platform.getBundle("org.eclipse.papyrus.infra.gmfdiag.css.theme");
-            if (themeBundle != null) {
-                java.net.URL p = themeBundle.getEntry("plugin.xml");
-                if (p != null) {
-                    try (java.io.InputStream in = p.openStream()) {
-                        String body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                        System.out.println("=== theme bundle plugin.xml ===");
-                        System.out.println(body);
-                        System.out.println("=== end ===");
-                    }
-                }
-                java.util.Enumeration<java.net.URL> css = themeBundle.findEntries("/", "*.css", true);
-                while (css != null && css.hasMoreElements()) {
-                    System.out.println("CSS file: " + css.nextElement());
+            for (String bn : new String[] {
+                    "org.eclipse.papyrus.infra.gmfdiag.css",
+                    "org.eclipse.papyrus.infra.gmfdiag.css.properties",
+                    "org.eclipse.papyrus.infra.gmfdiag.style",
+            }) {
+                org.osgi.framework.Bundle bb = Platform.getBundle(bn);
+                if (bb == null) continue;
+                java.net.URL p = bb.getEntry("plugin.xml");
+                if (p == null) continue;
+                try (java.io.InputStream in = p.openStream()) {
+                    String body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                    System.out.println("=== " + bn + " plugin.xml ===");
+                    System.out.println(body);
+                    System.out.println("=== end ===");
                 }
             }
         } catch (Throwable t) {
-            System.err.println("Theme dump failed: " + t);
+            System.err.println("Plugin.xml dump failed: " + t);
         }
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
@@ -184,14 +183,21 @@ public class ExportApplication implements IApplication {
 
         // Papyrus diagram CSS / styling theme. The preference key has
         // shifted across Papyrus minor versions, so set every plausible
-        // candidate to "classic" and let the actual reader pick.
+        // candidate to the Papyrus Theme id (the modern gradient look)
+        // and let the actual reader pick.
+        String themeId = "org.eclipse.papyrus.css.papyrus_theme";
         for (String node : new String[] {
                 "org.eclipse.papyrus.infra.gmfdiag.css",
+                "org.eclipse.papyrus.infra.gmfdiag.css.theme",
+                "org.eclipse.papyrus.infra.gmfdiag.css.properties",
                 "org.eclipse.papyrus.infra.gmfdiag.style",
                 "org.eclipse.papyrus.uml.diagram.css",
         }) {
-            for (String key : new String[] { "theme", "currentTheme", "theme.id", "themeId" }) {
-                putPreference(node, key, "classic");
+            for (String key : new String[] {
+                    "currentTheme", "theme", "theme.id", "themeId",
+                    "currentThemeId", "current.theme",
+            }) {
+                putPreference(node, key, themeId);
             }
         }
 
