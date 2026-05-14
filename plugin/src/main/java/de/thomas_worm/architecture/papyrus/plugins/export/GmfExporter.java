@@ -184,6 +184,18 @@ final class GmfExporter {
             try {
                 Class<?> ctClass = Class.forName(
                         "org.eclipse.papyrus.infra.gmfdiag.css.provider.CSSThemeInitializer");
+                System.out.println("CSS: CSSThemeInitializer methods:");
+                for (java.lang.reflect.Method mm : ctClass.getMethods()) {
+                    if (mm.getDeclaringClass() == ctClass
+                            || mm.getName().contains("init")
+                            || mm.getName().contains("ssue")) {
+                        System.out.println("  " + mm);
+                    }
+                }
+                System.out.println("CSS: implements interfaces:");
+                for (Class<?> ii : ctClass.getInterfaces()) {
+                    System.out.println("  " + ii.getName());
+                }
                 Object init = ctClass.getDeclaredConstructor().newInstance();
                 java.lang.reflect.Method m = null;
                 for (java.lang.reflect.Method mm : ctClass.getMethods()) {
