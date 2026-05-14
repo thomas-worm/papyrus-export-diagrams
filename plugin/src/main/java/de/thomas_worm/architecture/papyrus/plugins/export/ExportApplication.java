@@ -25,7 +25,7 @@ import org.eclipse.ui.PlatformUI;
  * <pre>
  *     --modelDir &lt;path&gt;   Directory scanned recursively for *.di / *.aird.
  *     --outDir   &lt;path&gt;   Where to write the image files.
- *     --format   &lt;name&gt;   SVG | PNG | JPEG | BMP | GIF | PDF (default SVG).
+ *     --format   &lt;name&gt;   SVG | PNG | JPEG | BMP | GIF (default SVG).
  *     --naming   &lt;mode&gt;   xmiId | name (default xmiId)
  * </pre>
  */

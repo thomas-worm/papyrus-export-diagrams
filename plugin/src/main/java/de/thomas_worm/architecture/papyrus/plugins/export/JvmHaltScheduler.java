@@ -33,11 +33,15 @@ final class JvmHaltScheduler {
             /**
              * Sleeps for {@code delayMillis} and then calls
              * {@link Runtime#halt} unless the sleep was interrupted.
+             *
+             * <p>Intentionally does not print before halting: Eclipse's
+             * shutdown logging holds the {@code System.err} monitor for
+             * extended periods, and a {@code println} here would block
+             * indefinitely instead of reaching the {@code halt} call.
              */
             @Override
             public void run() {
                 if (!sleepQuietly(delayMillis)) return;
-                System.err.println("ForceHalt: aborting JVM after " + delayMillis + "ms");
                 Runtime.getRuntime().halt(exitCode);
             }
         };

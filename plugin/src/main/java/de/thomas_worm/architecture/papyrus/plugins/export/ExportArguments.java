@@ -62,7 +62,7 @@ record ExportArguments(
             throw new IllegalArgumentException(
                     "Missing required arguments. Usage: "
                             + "--modelDir <dir> --outDir <dir> "
-                            + "[--format SVG|PNG|JPEG|BMP|GIF|PDF] "
+                            + "[--format SVG|PNG|JPEG|BMP|GIF] "
                             + "[--naming xmiId|name]");
         }
 

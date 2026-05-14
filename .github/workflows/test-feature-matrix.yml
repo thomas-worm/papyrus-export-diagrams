@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        format: [SVG, PNG, JPEG, BMP, GIF, PDF]
+        format: [SVG, PNG, JPEG, BMP, GIF]
         naming: [xmiId, name]
     runs-on: ${{ matrix.os }}
     steps:

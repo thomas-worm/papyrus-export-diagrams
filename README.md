@@ -44,7 +44,7 @@ jobs:
 | `papyrus-home`   | —       | From `setup-papyrus`. |
 | `model-dir`      | —       | Scanned recursively for `*.di` files. |
 | `output-dir`     | —       | Created if missing. |
-| `format`         | `SVG`   | One of `SVG`, `PNG`, `JPEG`, `BMP`, `GIF`, `PDF`. |
+| `format`         | `SVG`   | One of `SVG`, `PNG`, `JPEG`, `BMP`, `GIF`. |
 | `naming`         | `xmiId` | `xmiId` (notation `xmi:id`, always unique, cryptic) or `name` (user-facing diagram name; you keep them unique). |
 | `fail-on-error`  | `true`  | If `true`, the step fails when any single diagram fails to export. Set to `false` if you'd rather get partial output. |
 
@@ -60,12 +60,18 @@ jobs:
 Two export pipelines run in sequence over `model-dir`:
 
 - **Legacy GMF diagrams** (`*.notation` next to `*.di`) are rendered through
-  GMF's `CopyToImageUtil`. SVG, PNG, JPEG, BMP, GIF, PDF all supported.
+  GMF's `CopyToImageUtil`. SVG, PNG, JPEG, BMP, GIF all supported.
 - **Sirius representations** (`*.aird`) are opened via Sirius (to refresh the
   representation against the current semantic model), then the backing GMF
   `Diagram` is fed into the same `CopyToImageUtil`. Avoids a cast bug in
   Sirius's own SVG generator that triggers whenever a representation
-  contains embedded SVG figures. Full SVG/PNG/JPEG/BMP/GIF/PDF support.
+  contains embedded SVG figures. Full SVG/PNG/JPEG/BMP/GIF support.
+
+> **PDF is not exposed.** The GMF runtime shipped with Papyrus-Desktop 7.1.0
+> throws `CoreException("PDF export is not supported in this version")` from
+> `CopyToImageUtil` because it doesn't bundle a PDF transcoder. Convert one
+> of the supported formats afterwards with `rsvg-convert`, Inkscape, or
+> headless Chromium if you need PDF output.
 
 Filenames combine both pipelines into the same flat `output-dir`. With
 `naming: xmiId` you get notation `xmi:id`s for GMF diagrams and Sirius

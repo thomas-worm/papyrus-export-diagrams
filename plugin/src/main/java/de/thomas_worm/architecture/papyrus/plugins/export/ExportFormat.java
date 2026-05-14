@@ -14,6 +14,14 @@ import org.eclipse.gmf.runtime.diagram.ui.image.ImageFileFormat;
  * <p>Each value maps to a lowercase file extension (used to build the
  * output file name) and to the corresponding {@link ImageFileFormat}
  * that GMF's {@code CopyToImageUtil} expects as an argument.
+ *
+ * <p>{@code PDF} is intentionally excluded: the GMF runtime shipped
+ * with Papyrus-Desktop 7.1.0 does not bundle a PDF transcoder, and
+ * {@code CopyToImageUtil.copyToImage(..., ImageFileFormat.PDF, ...)}
+ * throws {@code CoreException("PDF export is not supported in this
+ * version")} on every diagram. Users who need PDF should convert one
+ * of the supported formats afterwards (e.g. with
+ * {@code rsvg-convert}, Inkscape, or headless Chromium).
  */
 enum ExportFormat {
 
@@ -33,10 +41,7 @@ enum ExportFormat {
     BMP("bmp", ImageFileFormat.BMP),
 
     /** Graphics Interchange Format. */
-    GIF("gif", ImageFileFormat.GIF),
-
-    /** Portable Document Format. */
-    PDF("pdf", ImageFileFormat.PDF);
+    GIF("gif", ImageFileFormat.GIF);
 
     /** Lowercase file extension, without leading dot. */
     private final String fileExtension;
@@ -86,10 +91,9 @@ enum ExportFormat {
             case "JPEG", "JPG" -> JPEG;
             case "BMP" -> BMP;
             case "GIF" -> GIF;
-            case "PDF" -> PDF;
             default -> throw new IllegalArgumentException(
                     "Unsupported format '" + name + "' "
-                            + "(expected one of SVG, PNG, JPEG, BMP, GIF, PDF)");
+                            + "(expected one of SVG, PNG, JPEG, BMP, GIF)");
         };
     }
 }

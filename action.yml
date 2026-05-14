@@ -21,7 +21,7 @@ inputs:
     description: 'Directory where image files will be written. Created if missing.'
     required: true
   format:
-    description: 'Image format: SVG, PNG, JPEG, BMP, GIF, or PDF.'
+    description: 'Image format: SVG, PNG, JPEG, BMP, or GIF.'
     required: false
     default: 'SVG'
   naming:

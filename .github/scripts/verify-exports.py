@@ -44,7 +44,6 @@ FORMAT_EXTENSION: dict[str, str] = {
     "JPEG": "jpg",
     "BMP":  "bmp",
     "GIF":  "gif",
-    "PDF":  "pdf",
 }
 
 #: Acceptable magic-byte prefixes for each supported export format.
@@ -56,7 +55,6 @@ FORMAT_MAGIC: dict[str, list[bytes]] = {
     "JPEG": [b"\xff\xd8\xff"],
     "BMP":  [b"BM"],
     "GIF":  [b"GIF87a", b"GIF89a"],
-    "PDF":  [b"%PDF-"],
 }
 
 #: Filename stems must match these regexes for each naming mode.
