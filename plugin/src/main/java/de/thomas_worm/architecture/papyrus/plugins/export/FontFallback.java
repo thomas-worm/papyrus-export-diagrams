@@ -62,9 +62,20 @@ final class FontFallback {
             String original = content;
 
             // (a) Resolve Java's logical "Dialog" family to a real font.
-            content = content.replace(
-                    "font-family=\"'Dialog'\"",
-                    "font-family=\"'" + ff.fallback + "'\"");
+            // Pick whichever font appears most often in the SVG's
+            // explicit font-family attributes — that way unstyled text
+            // matches what's already in the picture instead of being
+            // overridden with our generic fallback (e.g. on macOS, the
+            // model's .AppleSystemUIFont is kept everywhere instead of
+            // having Arial bleed into the default-styled labels).
+            String dialogReplacement = pickDialogReplacement(content, ff.fallback);
+            if (!"Dialog".equals(dialogReplacement)) {
+                content = content.replace(
+                        "font-family=\"'Dialog'\"",
+                        "font-family=\"'" + dialogReplacement + "'\"");
+                System.out.println("SvgPostProcess: rewrote Batik's 'Dialog' default to '"
+                        + dialogReplacement + "' in " + svgFile.getFileName());
+            }
 
             // (b) Tell viewers to interpolate the embedded PNGs instead
             // of nearest-neighbouring them.
@@ -87,6 +98,30 @@ final class FontFallback {
             System.err.println("FontFallback: SVG post-process failed for "
                     + svgFile + ": " + t);
         }
+    }
+
+    private static final Pattern FONT_FAMILY = Pattern.compile(
+            "font-family=\"'([^']+)'\"");
+
+    private static String pickDialogReplacement(String svg, String defaultFallback) {
+        // Tally explicit font-family declarations, ignoring "Dialog"
+        // itself; whichever real family is most used wins.
+        java.util.HashMap<String, Integer> counts = new java.util.HashMap<>();
+        Matcher m = FONT_FAMILY.matcher(svg);
+        while (m.find()) {
+            String fam = m.group(1);
+            if ("Dialog".equals(fam)) continue;
+            counts.merge(fam, 1, Integer::sum);
+        }
+        String winner = defaultFallback;
+        int best = -1;
+        for (var e : counts.entrySet()) {
+            if (e.getValue() > best) {
+                best = e.getValue();
+                winner = e.getKey();
+            }
+        }
+        return winner;
     }
 
     private static final Pattern PNG_DATA_URL = Pattern.compile(
@@ -170,8 +205,6 @@ final class FontFallback {
     static int remap(TransactionalEditingDomain editingDomain,
                      Iterable<? extends Resource> resources) {
         FontFallback ff = new FontFallback();
-        System.out.println("FontFallback: using '" + ff.fallback
-                + "' for unavailable fonts (" + ff.available.size() + " families on classpath)");
         Runnable body = () -> {
             for (Resource res : resources) {
                 ff.remapResource(res);
@@ -186,7 +219,14 @@ final class FontFallback {
             body.run();
         }
         if (ff.rewrites > 0) {
-            System.out.println("FontFallback: rewrote " + ff.rewrites + " FontStyle entries");
+            System.out.println("FontFallback: " + ff.rewrites
+                    + " FontStyle entries referenced fonts not installed locally "
+                    + "(of " + ff.available.size() + " families available); rewrote them to '"
+                    + ff.fallback + "'");
+        } else {
+            System.out.println("FontFallback: all model FontStyle entries reference fonts "
+                    + "already installed locally (" + ff.available.size() + " families available); "
+                    + "no remapping needed");
         }
         return ff.rewrites;
     }
