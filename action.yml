@@ -1,5 +1,5 @@
 name: 'Papyrus Diagram Export'
-description: 'Export all diagrams from a Papyrus model to image files. Requires a prior call to setup-papyrus.'
+description: 'Export all diagrams from a Papyrus model to image files. Requires a prior call to setup-papyrus. Supports Linux, macOS and Windows runners.'
 author: 'Thomas Worm'
 
 branding:
@@ -8,10 +8,14 @@ branding:
 
 inputs:
   papyrus-home:
-    description: 'Path to the Papyrus-Desktop installation, as produced by the setup-papyrus action.'
+    description: 'Path to the Papyrus-Desktop installation (folder containing the plugins/ directory). Produced by setup-papyrus as papyrus-home.'
     required: true
+  papyrus-launcher:
+    description: 'Path to the Papyrus-Desktop launcher executable. Produced by setup-papyrus as papyrus-launcher. Optional — falls back to searching inside papyrus-home if omitted.'
+    required: false
+    default: ''
   model-dir:
-    description: 'Directory containing the Papyrus model (scanned recursively for *.di files).'
+    description: 'Directory containing the Papyrus model (scanned recursively for *.di and *.aird files).'
     required: true
   output-dir:
     description: 'Directory where image files will be written. Created if missing.'
@@ -47,7 +51,7 @@ runs:
         set -euo pipefail
         # ${{ github.action_path }} is the absolute path to this action's
         # checkout on the runner, which is where the plugin source lives.
-        PLUGIN_SRC=$(readlink -f "${{ github.action_path }}")/plugin
+        PLUGIN_SRC=$(cd "${{ github.action_path }}" && pwd)/plugin
         echo "plugin-src=${PLUGIN_SRC}" >> "$GITHUB_OUTPUT"
         echo "build-dir=${{ runner.temp }}/papyrus-export-build" >> "$GITHUB_OUTPUT"
 
@@ -63,26 +67,38 @@ runs:
         # tool cache, so any previous bundle would otherwise mask new source.
         rm -f "${PAPYRUS_HOME}/plugins"/de.thomas_worm.architecture.papyrus.plugins.export_*.jar
 
+        rm -rf "${BUILD_DIR}/staging"
         mkdir -p "${BUILD_DIR}/staging"
-        cp -r "${PLUGIN_SRC}"/src/main/resources/* "${BUILD_DIR}/staging/"
+        cp -R "${PLUGIN_SRC}"/src/main/resources/* "${BUILD_DIR}/staging/"
 
-        # Papyrus 7.x ships JustJ Java 21; compile to 21 to match.
-        # The JustJ JRE lives under ${PAPYRUS_HOME}/plugins/org.eclipse.justj.openjdk.hotspot.jre.full.linux.x86_64_*/jre/bin/
-        JUSTJ_JAVAC=$(find "${PAPYRUS_HOME}/plugins" -path '*/jre/bin/javac' -type f -executable | head -n1 || true)
+        # The bundled JustJ JRE name varies per OS/arch (e.g.
+        # org.eclipse.justj.openjdk.hotspot.jre.full.linux.x86_64_*,
+        # ….macosx.aarch64_*, ….win32.x86_64_*). Find whichever ships
+        # with this Papyrus install. The javac binary picks up an .exe
+        # suffix on Windows.
+        JUSTJ_JAVAC=$(find "${PAPYRUS_HOME}/plugins" \
+            \( -path '*/jre/bin/javac' -o -path '*/jre/bin/javac.exe' \) \
+            -type f 2>/dev/null | head -n1 || true)
         if [[ -z "${JUSTJ_JAVAC}" ]]; then
-          # Fall back to whichever javac is on PATH (the runner has one).
-          JUSTJ_JAVAC="$(command -v javac)"
+          JUSTJ_JAVAC="$(command -v javac || true)"
+        fi
+        if [[ -z "${JUSTJ_JAVAC}" ]]; then
+          echo "::error::Could not find a javac under ${PAPYRUS_HOME}/plugins or on PATH"
+          exit 1
+        fi
+        JUSTJ_JAR="${JUSTJ_JAVAC%/*}/jar"
+        if [[ ! -x "${JUSTJ_JAR}" && -f "${JUSTJ_JAR}.exe" ]]; then
+          JUSTJ_JAR="${JUSTJ_JAR}.exe"
         fi
         echo "Using javac: ${JUSTJ_JAVAC}"
+        echo "Using jar:   ${JUSTJ_JAR}"
 
-        # Use wildcard classpath to avoid "Argument list too long" errors when
-        # there are many JARs. Java supports * wildcard in classpaths.
-        # Store the list of source files in a response file to handle large projects.
         find "${PLUGIN_SRC}/src/main/java" -name '*.java' > "${BUILD_DIR}/sources.txt"
-        "${JUSTJ_JAVAC}" --release 21 -proc:none -d "${BUILD_DIR}/staging" -cp "${PAPYRUS_HOME}/plugins/*" \
+        "${JUSTJ_JAVAC}" --release 21 -proc:none -d "${BUILD_DIR}/staging" \
+            -cp "${PAPYRUS_HOME}/plugins/*" \
             @"${BUILD_DIR}/sources.txt"
 
-        jar cfm "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar" \
+        "${JUSTJ_JAR}" cfm "${PAPYRUS_HOME}/plugins/de.thomas_worm.architecture.papyrus.plugins.export_1.0.0.jar" \
             "${BUILD_DIR}/staging/META-INF/MANIFEST.MF" \
             -C "${BUILD_DIR}/staging" de \
             -C "${BUILD_DIR}/staging" plugin.xml
@@ -91,48 +107,75 @@ runs:
         rm -rf "${PAPYRUS_HOME}/configuration/org.eclipse.osgi" \
                "${PAPYRUS_HOME}/configuration/org.eclipse.equinox.app" 2>/dev/null || true
 
-    - name: Run headless export under Xvfb
+    - name: Run headless export
       id: run
       shell: bash
       env:
-        PAPYRUS_HOME:  ${{ inputs.papyrus-home }}
-        MODEL_DIR:     ${{ inputs.model-dir }}
-        OUT_DIR:       ${{ inputs.output-dir }}
-        EXPORT_FORMAT: ${{ inputs.format }}
-        NAMING_MODE:   ${{ inputs.naming }}
-        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        PAPYRUS_HOME:     ${{ inputs.papyrus-home }}
+        PAPYRUS_LAUNCHER: ${{ inputs.papyrus-launcher }}
+        MODEL_DIR:        ${{ inputs.model-dir }}
+        OUT_DIR:          ${{ inputs.output-dir }}
+        EXPORT_FORMAT:    ${{ inputs.format }}
+        NAMING_MODE:      ${{ inputs.naming }}
+        FAIL_ON_ERROR:    ${{ inputs.fail-on-error }}
       run: |
-        set -euo pipefail
+        set -uo pipefail
         mkdir -p "${OUT_DIR}"
 
-        # Pick the launcher (same logic as setup-papyrus).
-        for cand in papyrus-desktop papyrus eclipse; do
-          if [[ -x "${PAPYRUS_HOME}/${cand}" ]]; then
-            LAUNCHER="${PAPYRUS_HOME}/${cand}"; break
-          fi
-        done
-        if [[ -z "${LAUNCHER:-}" ]]; then
-          echo "::error::No Papyrus launcher in ${PAPYRUS_HOME}"; exit 1
+        # ---- 1. Locate the launcher ------------------------------------
+        LAUNCHER="${PAPYRUS_LAUNCHER}"
+        if [[ -z "${LAUNCHER}" ]]; then
+          case "${RUNNER_OS}" in
+            Linux|macOS)
+              for cand in papyrus-desktop papyrus eclipse; do
+                if [[ -x "${PAPYRUS_HOME}/${cand}" ]]; then
+                  LAUNCHER="${PAPYRUS_HOME}/${cand}"; break
+                fi
+              done
+              ;;
+            Windows)
+              for cand in papyrus-desktop.exe papyrus-desktopc.exe papyrus.exe eclipse.exe eclipsec.exe; do
+                if [[ -f "${PAPYRUS_HOME}/${cand}" ]]; then
+                  LAUNCHER="${PAPYRUS_HOME}/${cand}"; break
+                fi
+              done
+              ;;
+          esac
         fi
+        if [[ -z "${LAUNCHER}" || ( ! -e "${LAUNCHER}" ) ]]; then
+          echo "::error::No Papyrus launcher (papyrus-launcher='${PAPYRUS_LAUNCHER}', papyrus-home='${PAPYRUS_HOME}')"
+          exit 1
+        fi
+        echo "Launcher: ${LAUNCHER}"
 
-        # Run a virtual display for SWT. Sirius's exporter creates short-lived
-        # shells and uses Batik for SVG; a 24-bit screen with GLX/render is
-        # the most compatible combination.
-        Xvfb :99 -screen 0 1920x1200x24 -ac +extension GLX +render -noreset &
-        XVFB_PID=$!
-        trap "kill ${XVFB_PID} >/dev/null 2>&1 || true" EXIT
-        export DISPLAY=:99
-        # Wait until the X server actually accepts connections (not just bound).
-        for i in 1 2 3 4 5 6 7 8 9 10; do
-          xdpyinfo -display :99 >/dev/null 2>&1 && break || sleep 1
-        done
+        # ---- 2. Display server (Linux only) ----------------------------
+        XVFB_PID=
+        TAIL_PID=
+        cleanup() {
+          [[ -n "${TAIL_PID}" ]] && kill "${TAIL_PID}" >/dev/null 2>&1 || true
+          [[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" >/dev/null 2>&1 || true
+        }
+        trap cleanup EXIT
+
+        if [[ "${RUNNER_OS}" == "Linux" ]]; then
+          Xvfb :99 -screen 0 1920x1200x24 -ac +extension GLX +render -noreset &
+          XVFB_PID=$!
+          export DISPLAY=:99
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            xdpyinfo -display :99 >/dev/null 2>&1 && break || sleep 1
+          done
+        fi
 
         WORKSPACE_DIR="${RUNNER_TEMP}/papyrus-export-ws"
         rm -rf "${WORKSPACE_DIR}"
         mkdir -p "${WORKSPACE_DIR}"
+        LOG="${RUNNER_TEMP}/papyrus-export.log"
+        : > "${LOG}"
 
-        set +e
-        # Start launcher in background so we can monitor for output
+        # ---- 3. Launch ---------------------------------------------------
+        # Redirect to file directly (no pipe to tee) so $! is the actual
+        # launcher PID, which the watchdog needs in order to kill it.
+        # A separate `tail -F` streams the log to stdout for log visibility.
         "${LAUNCHER}" -nosplash -consoleLog \
             -application de.thomas_worm.architecture.papyrus.plugins.export.app \
             -data "${WORKSPACE_DIR}" \
@@ -141,43 +184,41 @@ runs:
             --format "${EXPORT_FORMAT}" \
             --naming "${NAMING_MODE}" \
             -vmargs -Djava.awt.headless=false \
-            2>&1 | tee "${RUNNER_TEMP}/papyrus-export.log" &
+            > "${LOG}" 2>&1 &
         LAUNCHER_PID=$!
-        
-        # Monitor process: kill if it produces no new output for this many
-        # seconds. OSGi bring-up plus GMF's off-screen edit-part construction
-        # can take well over a minute on a cold cache, so be generous.
-        LAST_OUTPUT_TIME=$(date +%s)
-        SILENCE_THRESHOLD=180
-        while kill -0 $LAUNCHER_PID 2>/dev/null; do
-            sleep 1
-            CURRENT_TIME=$(date +%s)
-            
-            # Check if log file was modified recently (new output)
-            if [ -f "${RUNNER_TEMP}/papyrus-export.log" ]; then
-                LOG_MTIME=$(stat -f%m "${RUNNER_TEMP}/papyrus-export.log" 2>/dev/null || stat -c%Y "${RUNNER_TEMP}/papyrus-export.log" 2>/dev/null)
-                if [ -n "$LOG_MTIME" ] && [ "$LOG_MTIME" -gt "$LAST_OUTPUT_TIME" ]; then
-                    LAST_OUTPUT_TIME=$LOG_MTIME
-                fi
-            fi
-            
-            # Check silence duration
-            TIME_SILENT=$((CURRENT_TIME - LAST_OUTPUT_TIME))
-            if [ $TIME_SILENT -gt $SILENCE_THRESHOLD ]; then
-                echo "ERROR: Process silent for ${TIME_SILENT}s - force killing (PID: $LAUNCHER_PID)"
-                kill -9 $LAUNCHER_PID 2>/dev/null || true
-                pkill -9 -f "eclipse|papyrus" 2>/dev/null || true
-                break
-            fi
-        done
-        
-        wait $LAUNCHER_PID 2>/dev/null
-        RC=$?
-        echo "JVM exit code: $RC"
-        set -e
 
-        # The application prints "Done. exported=N failed=M" on its last line.
-        SUMMARY=$(grep -E '^Done\. exported=' "${RUNNER_TEMP}/papyrus-export.log" | tail -n1 || true)
+        tail -F "${LOG}" 2>/dev/null &
+        TAIL_PID=$!
+
+        # ---- 4. Watchdog -------------------------------------------------
+        # Kill if no new output for this many seconds. OSGi bring-up plus
+        # workbench creation can be slow on a cold cache; 180s is generous
+        # but bounds the worst case so the runner-side 6h timeout never
+        # comes into play.
+        SILENCE_THRESHOLD=180
+        LAST_OUTPUT_TIME=$(date +%s)
+        while kill -0 "${LAUNCHER_PID}" 2>/dev/null; do
+          sleep 1
+          if [[ -f "${LOG}" ]]; then
+            LOG_MTIME=$(stat -c%Y "${LOG}" 2>/dev/null || stat -f%m "${LOG}" 2>/dev/null || true)
+            if [[ -n "${LOG_MTIME}" && "${LOG_MTIME}" -gt "${LAST_OUTPUT_TIME}" ]]; then
+              LAST_OUTPUT_TIME="${LOG_MTIME}"
+            fi
+          fi
+          NOW=$(date +%s)
+          if (( NOW - LAST_OUTPUT_TIME > SILENCE_THRESHOLD )); then
+            echo "ERROR: launcher silent for $((NOW - LAST_OUTPUT_TIME))s — killing PID ${LAUNCHER_PID}"
+            kill -9 "${LAUNCHER_PID}" 2>/dev/null || true
+            break
+          fi
+        done
+
+        wait "${LAUNCHER_PID}" 2>/dev/null
+        RC=$?
+        echo "JVM exit code: ${RC}"
+
+        # ---- 5. Summary --------------------------------------------------
+        SUMMARY=$(grep -E '^Done\. exported=' "${LOG}" | tail -n1 || true)
         EXPORTED=$(echo "${SUMMARY}" | sed -n 's/.*exported=\([0-9]*\).*/\1/p')
         FAILED=$(  echo "${SUMMARY}" | sed -n 's/.*failed=\([0-9]*\).*/\1/p')
         EXPORTED=${EXPORTED:-0}
@@ -185,12 +226,9 @@ runs:
 
         echo "exported=${EXPORTED}" >> "$GITHUB_OUTPUT"
         echo "failed=${FAILED}"     >> "$GITHUB_OUTPUT"
-
         echo "Exported: ${EXPORTED} diagram(s). Failed: ${FAILED}."
 
         if [[ "${FAIL_ON_ERROR}" == "true" ]] && { [[ "${RC}" -ne 0 ]] || [[ "${FAILED}" -gt 0 ]]; }; then
           echo "::error::Papyrus export failed: ${FAILED} diagram(s) failed, launcher exit code ${RC}."
-          echo "::error::Check log for details - look for 'GMF:' or 'Sirius:' messages."
-          echo "::error::Note: Headless Papyrus may not support all diagram types (GMF requires editing domain)."
           exit 1
         fi

@@ -9,60 +9,53 @@ permissions:
 
 jobs:
   testExportDiagrams:
-    runs-on: ubuntu-latest
-    name: "Test papyrus-export-diagrams action"
+    name: "Test on ${{ matrix.os }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            output-dir: model_images_linux
+          - os: macos-latest
+            output-dir: model_images_macos
+          - os: windows-latest
+            output-dir: model_images_windows
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install fonts for diagram rendering
-        # Models authored on macOS often store fonts like .AppleSystemUIFont
-        # or Helvetica that don't exist on Linux. Install Microsoft and
-        # metric-compatible alternatives so the headless renderer measures
-        # labels with the same widths as the GUI editor.
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          set -eu
-          sudo apt-get update -y
-          # ttf-mscorefonts-installer needs the contrib repo and EULA accept.
-          echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true \
-            | sudo debconf-set-selections
-          sudo apt-get install -y --no-install-recommends \
-            fonts-liberation fonts-liberation2 fonts-dejavu fonts-noto fonts-noto-cjk \
-            fonts-crosextra-carlito fonts-crosextra-caladea ttf-mscorefonts-installer \
-            fontconfig
-          sudo fc-cache -f
-
       - name: Set up Papyrus
         id: papyrus
-        uses: thomas-worm/setup-papyrus@v1
+        # While developing the multi-OS support, pin to main on
+        # setup-papyrus. Switch to @v1 once that tag is moved.
+        uses: thomas-worm/setup-papyrus@main
 
       - name: Clean previous output
-        # The test workflow commits model_images back to the repo, so each
-        # run sees the previous run's files. Wipe them so we don't leave
-        # orphaned files behind when filenames or formats change.
-        run: rm -rf model_images && mkdir -p model_images
+        shell: bash
+        run: rm -rf "${{ matrix.output-dir }}" && mkdir -p "${{ matrix.output-dir }}"
 
       - name: Run export action
         id: export
         uses: ./
         with:
-          papyrus-home: ${{ steps.papyrus.outputs.papyrus-home }}
-          model-dir:    model
-          output-dir:   model_images
+          papyrus-home:     ${{ steps.papyrus.outputs.papyrus-home }}
+          papyrus-launcher: ${{ steps.papyrus.outputs.papyrus-launcher }}
+          model-dir:        model
+          output-dir:       ${{ matrix.output-dir }}
 
       - name: Show exported images
+        shell: bash
         run: |
           echo "Exported diagrams: ${{ steps.export.outputs.exported-count }}"
           echo "Failed exports:    ${{ steps.export.outputs.failed-count }}"
-          ls -lR model_images || true
+          ls -lR "${{ matrix.output-dir }}" || true
 
       - name: Upload export log on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
-          name: papyrus-export-log
+          name: papyrus-export-log-${{ matrix.os }}
           path: ${{ runner.temp }}/papyrus-export.log
           if-no-files-found: warn
 
@@ -70,10 +63,27 @@ jobs:
         # Run on partial export failures too — if anything was rendered,
         # the user wants those files saved rather than discarded.
         if: ${{ always() && github.event_name == 'push' }}
+        shell: bash
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add model_images
-          git diff --staged --quiet || \
-            (git commit -m "chore: re-export diagrams [skip ci]" && \
-             git push origin HEAD:${GITHUB_REF#refs/heads/})
+          git add "${{ matrix.output-dir }}"
+          # Each matrix job pushes its own OS-specific directory. Pull
+          # first in case another OS in the matrix pushed before us;
+          # rebasing on top is safe because each job touches a disjoint
+          # set of paths.
+          BRANCH=${GITHUB_REF#refs/heads/}
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: re-export diagrams (${{ matrix.os }}) [skip ci]"
+            # Push with retry against concurrent matrix push contention.
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin "${BRANCH}" || true
+              if git push origin "HEAD:${BRANCH}"; then
+                echo "pushed on attempt ${attempt}"
+                break
+              fi
+              echo "push attempt ${attempt} lost the race; retrying"
+              sleep $((attempt * 3))
+            done
+          fi
