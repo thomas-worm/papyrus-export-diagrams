@@ -182,41 +182,27 @@ final class GmfExporter {
                 System.err.println("GMF: font remap failed (continuing with original fonts): " + t);
             }
 
-            // Diagnostic: log resource and diagram impl classes.
-            System.out.println("CSS: notation resource impl is "
-                    + notationRes.getClass().getName());
-            // Reset the CSS engine attached to each loaded diagram so it
-            // re-parses the active theme stylesheets, and ask each diagram
-            // to drop its cached element adapters. Without this, the
-            // engine instance set up at resource-load time may still hold
-            // a stale stylesheet list.
+            // Make sure each diagram's CSS engine has the freshly-loaded
+            // theme stylesheets in its parsed-rules list and that no
+            // stale element-adapter cache is in the way. The engine is
+            // created lazily when CSSDiagramImpl.getEngine() runs; that
+            // happens here when the resource is first painted, but we
+            // want the reset to be deterministic for diagnostics.
             try {
                 Class<?> cnrClass = Class.forName(
                         "org.eclipse.papyrus.infra.gmfdiag.css.resource.CSSNotationResource");
-                java.lang.reflect.Method isCssEnabled =
-                        cnrClass.getMethod("isCSSEnabled",
-                                org.eclipse.emf.ecore.resource.Resource.class);
-                java.lang.reflect.Method getEngine =
-                        cnrClass.getMethod("getEngine",
-                                org.eclipse.emf.ecore.resource.Resource.class);
-                boolean cssOn = (Boolean) isCssEnabled.invoke(null, notationRes);
-                Object engine = getEngine.invoke(null, notationRes);
-                System.out.println("CSS: notation resource impl is "
-                        + notationRes.getClass().getName()
-                        + ", CSSEnabled=" + cssOn
-                        + ", engine=" + engine);
+                Object engine = cnrClass.getMethod("getEngine",
+                        org.eclipse.emf.ecore.resource.Resource.class).invoke(null, notationRes);
                 if (engine != null) {
                     try { engine.getClass().getMethod("reset").invoke(engine); } catch (Throwable ignore) { }
                     try { engine.getClass().getMethod("resetCache").invoke(engine); } catch (Throwable ignore) { }
                 }
-                try {
-                    Class<?> diagImpl = Class.forName(
-                            "org.eclipse.papyrus.infra.gmfdiag.css.notation.CSSDiagramImpl");
-                    java.lang.reflect.Method resetCss = diagImpl.getMethod("resetCSS");
-                    for (Diagram d : collectDiagrams(notationRes)) {
-                        if (diagImpl.isInstance(d)) resetCss.invoke(d);
-                    }
-                } catch (Throwable ignore) { }
+                Class<?> diagImpl = Class.forName(
+                        "org.eclipse.papyrus.infra.gmfdiag.css.notation.CSSDiagramImpl");
+                java.lang.reflect.Method resetCss = diagImpl.getMethod("resetCSS");
+                for (Diagram d : collectDiagrams(notationRes)) {
+                    if (diagImpl.isInstance(d)) resetCss.invoke(d);
+                }
             } catch (Throwable t) {
                 System.err.println("CSS: engine reset failed: " + t);
             }

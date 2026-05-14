@@ -80,47 +80,22 @@ public class ExportApplication implements IApplication {
 
         String fileExt = format.toLowerCase(Locale.ROOT);
 
-        // Pin the diagram-rendering theme to "classic" so headless output
-        // matches the look the user picked in the Papyrus GUI editor.
-        // We set every preference node that Papyrus / Eclipse have been
-        // observed to read this from; whichever one the runtime actually
-        // consults wins, the rest are no-ops.
+        // Pin Papyrus's diagram theme so the headless render matches
+        // the look the user picked in the GUI editor (set both before
+        // and after bundle activation; the CSS bundle's
+        // ThemePreferenceInitializer may overwrite our value during
+        // its startup).
         applyThemePreferences();
-
-        // Diagnostic: verify the preference is actually stored and ask
-        // ThemeManager what it thinks is active.
-        try {
-            String got = InstanceScope.INSTANCE
-                    .getNode("org.eclipse.papyrus.infra.gmfdiag.css")
-                    .get("currentTheme", "<unset>");
-            System.out.println("CSS: InstanceScope currentTheme = " + got);
-        } catch (Throwable t) {
-            System.err.println("Reading currentTheme failed: " + t);
-        }
-        // Re-apply theme preferences AFTER bundle activations: the CSS
-        // bundle's ThemePreferenceInitializer can re-set "currentTheme"
-        // during activation, overwriting our earlier value with its
-        // initializer default. Doing it again here makes sure our
-        // chosen theme survives.
-        applyThemePreferences();
-        try {
-            String got = InstanceScope.INSTANCE
-                    .getNode("org.eclipse.papyrus.infra.gmfdiag.css")
-                    .get("currentTheme", "<unset>");
-            System.out.println("CSS (post-activate): currentTheme = " + got);
-        } catch (Throwable ignore) { }
 
         // Best-effort activation. Failures tolerated — Papyrus's bundle set
         // varies slightly across patch releases and across Desktop vs Classic.
+        // The CSS bundles must be activated before any .notation file is
+        // loaded so CSSHelper.installCSSSupport can give the model set
+        // CSS-aware resource factories (which is what makes Diagram impls
+        // emit gradient fills during paint).
         for (String b : new String[] {
                 "org.eclipse.papyrus.infra.core",
                 "org.eclipse.papyrus.infra.gmfdiag.common",
-                // CSS engine. Activator typically registers the
-                // CSSNotationResource.Factory with the EMF global
-                // resource-factory registry, which is what gives loaded
-                // notation diagrams a CSS-style adapter and lets the
-                // edit parts paint with the gradient fills configured
-                // by the theme stylesheets.
                 "org.eclipse.papyrus.infra.gmfdiag.css",
                 "org.eclipse.papyrus.uml.diagram.css",
                 "org.eclipse.papyrus.infra.gmfdiag.style",
@@ -131,16 +106,12 @@ public class ExportApplication implements IApplication {
         }) {
             try {
                 var bundle = Platform.getBundle(b);
-                if (bundle != null) {
-                    bundle.start();
-                    System.out.println("Activated: " + b);
-                } else {
-                    System.err.println("Bundle not present: " + b);
-                }
+                if (bundle != null) bundle.start();
             } catch (Throwable t) {
                 System.err.println("Could not activate " + b + ": " + t);
             }
         }
+        applyThemePreferences();
 
         // Papyrus's GMF edit parts hard-reference PlatformUI.getWorkbench()
         // from static initializers (e.g. ArchitectureFrameworkCustomizationManagerUpdater)
